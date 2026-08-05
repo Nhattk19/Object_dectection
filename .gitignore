@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Raw/processed datasets are local artifacts, not source code.
+data/VisDrone2019-DET-*/
+data/processed/
