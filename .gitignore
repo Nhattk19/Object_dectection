@@ -1,7 +1,20 @@
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
+.pytest_cache/
 
-# Raw/processed datasets are local artifacts, not source code.
-data/VisDrone2019-DET-*/
-data/processed/
+# Local Python environments.
+.venv/
+venv/
+env/
+htk/
+
+# Only keep source/config/notebooks at the top level of data/. All downloaded
+# archives, raw splits, generated labels, COCO exports and other artifacts stay
+# local even if their directory names change in a later download.
+data/*
+!data/.gitkeep
+!data/*.py
+!data/*.yaml
+!data/*.yml
+!data/*.ipynb
