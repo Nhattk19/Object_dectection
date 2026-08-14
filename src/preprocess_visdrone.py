@@ -1,4 +1,4 @@
-"""Command-line entry point for converting VisDrone annotations to YOLO."""
+"""Validate VisDrone and export both YOLO labels and COCO detection JSON."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from visdrone_data import prepare_dataset
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate VisDrone data and convert annotations to YOLO format."
+        description="Validate VisDrone and export YOLO plus COCO detection formats."
     )
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--output-root", type=Path, default=Path("data/processed/VisDrone"))
@@ -56,9 +56,8 @@ def main() -> None:
     if args.dry_run:
         print("\nDry-run complete: no files were written.")
     else:
-        print(f"\nYOLO dataset written to: {args.output_root.resolve()}")
+        print(f"\nYOLO and COCO datasets written to: {args.output_root.resolve()}")
 
 
 if __name__ == "__main__":
     main()
-

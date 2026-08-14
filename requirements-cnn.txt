@@ -1,0 +1,5 @@
+# Install a mutually compatible PyTorch/Torchvision pair for the target CUDA runtime.
+torch>=2.1
+torchvision>=0.16
+pycocotools>=2.0.7
+tqdm>=4.66

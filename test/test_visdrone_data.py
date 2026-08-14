@@ -6,7 +6,13 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from visdrone_data import Annotation, convert_split, evaluate_annotation, xywh_to_yolo
+from visdrone_data import (
+    Annotation,
+    convert_split,
+    evaluate_annotation,
+    write_coco_annotations,
+    xywh_to_yolo,
+)
 
 
 def test_valid_box_is_converted_to_normalized_yolo():
@@ -53,3 +59,26 @@ def test_convert_split_writes_expected_yolo_label(tmp_path):
     assert (output / "labels" / "train" / "sample.txt").read_text() == (
         "3 0.250000 0.200000 0.300000 0.200000\n"
     )
+
+
+def test_write_coco_annotations_preserves_visdrone_category_ids(tmp_path):
+    import json
+
+    source = tmp_path / "source"
+    (source / "images").mkdir(parents=True)
+    (source / "annotations").mkdir()
+    Image.new("RGB", (100, 200)).save(source / "images" / "sample.jpg")
+    (source / "annotations" / "sample.txt").write_text(
+        "10,20,30,40,1,4,0,0\n0,0,10,10,0,0,0,0\n",
+        encoding="utf-8",
+    )
+
+    target = write_coco_annotations(source, tmp_path / "processed", "train")
+    payload = json.loads(target.read_text(encoding="utf-8"))
+
+    assert payload["images"] == [
+        {"id": 1, "file_name": "train/sample.jpg", "width": 100, "height": 200}
+    ]
+    assert payload["annotations"][0]["category_id"] == 4
+    assert payload["annotations"][0]["bbox"] == [10, 20, 30, 40]
+    assert len(payload["categories"]) == 10

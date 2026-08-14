@@ -18,3 +18,9 @@ data/*
 !data/*.yaml
 !data/*.yml
 !data/*.ipynb
+
+# Training artifacts are reproducible and too large for Git.
+models/checkpoints/
+models/runs/
+*.pth
+*.pt

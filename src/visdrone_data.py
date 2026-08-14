@@ -310,6 +310,93 @@ def convert_split(
     return stats
 
 
+def write_coco_annotations(
+    source_split_dir: Path | str,
+    output_root: Path | str,
+    split: str,
+    *,
+    min_box_width: float = 1.0,
+    min_box_height: float = 1.0,
+) -> Path:
+    """Write a COCO detection JSON matching the images materialized by ``convert_split``.
+
+    VisDrone category IDs are intentionally preserved as 1..10. Torchvision uses
+    label 0 for the background class, so preserving these IDs avoids an extra and
+    error-prone remapping step in the Faster R-CNN dataset adapter.
+    """
+
+    source = Path(source_split_dir)
+    output = Path(output_root)
+    images = _image_map(source / "images")
+    annotation_dir = source / "annotations"
+    annotation_files = (
+        {path.stem: path for path in annotation_dir.glob("*.txt")}
+        if annotation_dir.is_dir()
+        else {}
+    )
+
+    coco_images: list[dict] = []
+    coco_annotations: list[dict] = []
+    annotation_id = 1
+    for image_id, (stem, image_path) in enumerate(images.items(), start=1):
+        annotation_path = annotation_files.get(stem)
+        if annotation_path is None:
+            continue
+        try:
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
+        except (OSError, UnidentifiedImageError):
+            continue
+
+        coco_images.append(
+            {
+                "id": image_id,
+                "file_name": f"{split}/{image_path.name}",
+                "width": image_width,
+                "height": image_height,
+            }
+        )
+        annotations, _ = read_annotation_file(annotation_path)
+        for annotation in annotations:
+            status, clipped, _ = evaluate_annotation(
+                annotation,
+                image_width,
+                image_height,
+                min_box_width,
+                min_box_height,
+            )
+            if status != "keep":
+                continue
+            assert clipped is not None
+            x, y, width, height = clipped
+            coco_annotations.append(
+                {
+                    "id": annotation_id,
+                    "image_id": image_id,
+                    "category_id": annotation.category,
+                    "bbox": [x, y, width, height],
+                    "area": width * height,
+                    "iscrowd": 0,
+                }
+            )
+            annotation_id += 1
+
+    payload = {
+        "info": {"description": f"VisDrone2019-DET {split}"},
+        "licenses": [],
+        "images": coco_images,
+        "annotations": coco_annotations,
+        "categories": [
+            {"id": category_id, "name": name, "supercategory": "object"}
+            for category_id, name in CLASS_NAMES.items()
+        ],
+    }
+    target = output / "annotations" / f"instances_{split}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return target
+
+
 def write_dataset_yaml(output_root: Path | str, yaml_path: Path | str | None = None) -> Path:
     """Write an Ultralytics-compatible YAML for the processed dataset."""
     import yaml
@@ -353,6 +440,14 @@ def prepare_dataset(
                 dry_run=dry_run,
             )
         )
+        if not dry_run:
+            write_coco_annotations(
+                source,
+                output_root,
+                split,
+                min_box_width=min_box_width,
+                min_box_height=min_box_height,
+            )
     if not dry_run:
         write_dataset_yaml(output_root)
         report_path = Path(output_root) / "preprocessing_report.json"
