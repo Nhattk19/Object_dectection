@@ -207,14 +207,19 @@ def train_one_epoch(
     """Train one epoch and return mean component/total losses."""
 
     import torch
+    from tqdm.auto import tqdm
 
     model.train()
     totals: dict[str, float] = defaultdict(float)
     batches = 0
     start = time.perf_counter()
     amp_enabled = scaler is not None and device.type == "cuda"
-    for batch_index, (images, targets) in enumerate(data_loader):
-        if max_batches is not None and batch_index >= max_batches:
+    total_batches = len(data_loader)
+    if max_batches is not None:
+        total_batches = min(total_batches, max_batches)
+    progress = tqdm(data_loader, total=total_batches, desc="train", leave=False)
+    for batch_index, (images, targets) in enumerate(progress):
+        if batch_index >= total_batches:
             break
         images = [image.to(device, non_blocking=True) for image in images]
         targets = move_targets_to_device(targets, device)
@@ -240,6 +245,7 @@ def train_one_epoch(
             totals[name] += float(value.detach())
         totals["loss_total"] += float(loss.detach())
         batches += 1
+        progress.set_postfix(loss=f"{float(loss.detach()):.4f}")
     if batches == 0:
         raise ValueError("The training loader yielded no batches")
     result = {name: value / batches for name, value in totals.items()}
@@ -296,6 +302,7 @@ def evaluate_coco(
     """Evaluate bbox AP with pycocotools and return named COCO metrics."""
 
     import torch
+    from tqdm.auto import tqdm
 
     try:
         from pycocotools.coco import COCO
@@ -307,8 +314,12 @@ def evaluate_coco(
     results: list[dict[str, Any]] = []
     evaluated_ids: list[int] = []
     with torch.inference_mode():
-        for batch_index, (images, targets) in enumerate(data_loader):
-            if max_batches is not None and batch_index >= max_batches:
+        total_batches = len(data_loader)
+        if max_batches is not None:
+            total_batches = min(total_batches, max_batches)
+        progress = tqdm(data_loader, total=total_batches, desc="validation", leave=False)
+        for batch_index, (images, targets) in enumerate(progress):
+            if batch_index >= total_batches:
                 break
             images = [image.to(device, non_blocking=True) for image in images]
             outputs = model(images)

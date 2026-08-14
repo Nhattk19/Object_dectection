@@ -233,8 +233,13 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=milestones, gamma=0.1
     )
-    # torch.cuda.amp.GradScaler keeps compatibility with the minimum torch 2.1.
-    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
+    if device.type == "cuda":
+        try:
+            scaler = torch.amp.GradScaler("cuda")
+        except AttributeError:  # Compatibility with the minimum torch 2.1.
+            scaler = torch.cuda.amp.GradScaler()
+    else:
+        scaler = None
 
     start_epoch = 0
     history: list[dict] = []
@@ -264,6 +269,7 @@ def main() -> None:
     if start_epoch >= effective_epochs:
         print(f"Checkpoint already reached {start_epoch}/{effective_epochs} epochs; nothing to train.")
     for epoch in range(start_epoch, effective_epochs):
+        print(f"Epoch {epoch + 1}/{effective_epochs}", flush=True)
         train_metrics = train_one_epoch(
             model,
             train_loader,
@@ -288,7 +294,7 @@ def main() -> None:
         history.append(row)
         current_map = float(val_metrics.get("map", -1.0))
         best_map = max(best_map, current_map)
-        print(json.dumps(row, ensure_ascii=False))
+        print(json.dumps(row, ensure_ascii=False), flush=True)
         checkpoint_args = dict(
             model=model,
             optimizer=optimizer,
