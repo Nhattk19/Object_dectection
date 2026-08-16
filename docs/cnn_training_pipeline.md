@@ -163,7 +163,23 @@ So sánh `summary.json` và `history.csv` của hai run theo:
 
 Chỉ dùng validation để chọn cấu hình. Test-dev được dùng sau khi đã chốt model.
 
-## 6. Lệnh tương đương notebook
+## 6. Chạy F2 small anchors
+
+Sau khi F1 không cải thiện mAP/AP_small so với F0, chạy F2 từ cùng pretrained
+COCO initialization như F0 và chỉ thay anchor FPN thành `8,16,32,64,128`:
+
+```python
+EXPERIMENT = "F2"
+RUN_SMOKE_FIRST = True
+TRAIN_FULL = True
+EPOCHS = 25
+RESUME_FROM = None
+```
+
+F2 không dùng augmentation và không resume checkpoint F0/F1. Output được lưu
+tại `/kaggle/working/faster_rcnn_runs/f2/`.
+
+## 7. Lệnh tương đương notebook
 
 Nếu muốn chạy trực tiếp trong Kaggle terminal:
 

@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / "models" / "checkpoints",
     )
-    parser.add_argument("--experiment", choices=["F0", "F1"], default="F0")
+    parser.add_argument("--experiment", choices=["F0", "F1", "F2"], default="F0")
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--workers", type=int, default=2)
@@ -181,6 +181,7 @@ def main() -> None:
         "pretrained": pretrained,
         "initialize_from_pretrained_this_run": initialize_from_pretrained,
         "augmentation": args.experiment == "F1",
+        "small_anchors": args.experiment == "F2",
         "device": str(device),
         "smoke_test": args.smoke_test,
     }
@@ -221,6 +222,7 @@ def main() -> None:
 
     model = build_faster_rcnn(
         pretrained=initialize_from_pretrained,
+        small_anchors=args.experiment == "F2",
         min_size=min_size,
         max_size=max_size,
     ).to(device)
