@@ -179,7 +179,24 @@ RESUME_FROM = None
 F2 không dùng augmentation và không resume checkpoint F0/F1. Output được lưu
 tại `/kaggle/working/faster_rcnn_runs/f2/`.
 
-## 7. Lệnh tương đương notebook
+## 7. Chạy F3 crowded proposals
+
+F2 tăng AP_small nhưng giảm mAP tổng và recall, nên F3 quay lại F0 và chỉ tăng
+RPN proposal limits: train `4000→2000` và validation `2000→1000` trước/sau
+NMS. Anchor và giới hạn COCO 100 detections/ảnh vẫn giữ như F0.
+
+```python
+EXPERIMENT = "F3"
+RUN_SMOKE_FIRST = True
+TRAIN_FULL = True
+EPOCHS = 25
+RESUME_FROM = None
+```
+
+F3 không resume F0/F1/F2. Output được lưu tại
+`/kaggle/working/faster_rcnn_runs/f3/`.
+
+## 8. Lệnh tương đương notebook
 
 Nếu muốn chạy trực tiếp trong Kaggle terminal:
 

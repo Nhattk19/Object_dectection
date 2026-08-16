@@ -116,13 +116,14 @@ xuống `±5°`. Không thêm Mosaic/tiling để “cứu” F1 trước khi t�
 | F0 | Baseline | Faster R-CNN cơ bản đạt gì? |
 | F1 | F0 + augmentation | Augmentation có cải thiện generalization? |
 | F2 | F0 + anchor 8–128 | Anchor nhỏ có tăng AP_small/recall? |
-| F3 | F2 + tăng proposals/detections | Có giảm bỏ sót ảnh crowded? |
-| F4 | F2/F3 + input 1024 | Resolution lớn có đáng chi phí GPU? |
+| F3 | F0 + tăng RPN proposals | Có giảm bỏ sót ảnh crowded? |
+| F4 | Cấu hình tốt nhất + input 1024 | Resolution lớn có đáng chi phí GPU? |
 | F5 | Tiling 640, overlap 20% | Tiling cải thiện small object bao nhiêu? |
 
 F2 trở đi chỉ chạy sau khi F0 và F1 đã có kết quả. Vì F1 làm giảm mAP tổng và
-AP_small trong lần chạy seed 42, F2 quay lại F0 rồi chỉ đổi anchor. Mỗi vòng
-chỉ thay đổi một nhóm yếu tố để giữ ý nghĩa ablation.
+AP_small trong lần chạy seed 42, F2 quay lại F0 rồi chỉ đổi anchor. F2 tăng
+AP_small nhưng giảm mAP tổng và recall, nên F3 cũng quay lại F0 rồi chỉ tăng
+RPN proposals. Mỗi vòng chỉ thay đổi một nhóm yếu tố để giữ ý nghĩa ablation.
 
 ## Local và Kaggle
 
