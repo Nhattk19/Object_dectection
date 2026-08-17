@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=PROJECT_ROOT / "models" / "checkpoints",
     )
     parser.add_argument(
-        "--experiment", choices=["F0", "F1", "F2", "F3"], default="F0"
+        "--experiment", choices=["F0", "F1", "F2", "F3", "F4"], default="F0"
     )
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -169,6 +169,9 @@ def main() -> None:
     max_batches = 2 if args.smoke_test else None
     pretrained = not args.smoke_test and not args.no_pretrained
     initialize_from_pretrained = pretrained and not args.resume
+    accumulation_steps = (
+        2 if not args.smoke_test and args.experiment == "F4" and batch_size == 1 else 1
+    )
 
     config = {
         "experiment": args.experiment,
@@ -176,6 +179,8 @@ def main() -> None:
         "output_dir": str(run_dir),
         "epochs": effective_epochs,
         "batch_size": batch_size,
+        "accumulation_steps": accumulation_steps,
+        "effective_batch_size": batch_size * accumulation_steps,
         "workers": workers,
         "seed": args.seed,
         "min_size": min_size,
@@ -184,7 +189,8 @@ def main() -> None:
         "initialize_from_pretrained_this_run": initialize_from_pretrained,
         "augmentation": args.experiment == "F1",
         "small_anchors": args.experiment == "F2",
-        "crowded_proposals": args.experiment == "F3",
+        "crowded_proposals": args.experiment in {"F3", "F4"},
+        "model_version": "v2" if args.experiment == "F4" else "v1",
         "device": str(device),
         "smoke_test": args.smoke_test,
     }
@@ -226,7 +232,8 @@ def main() -> None:
     model = build_faster_rcnn(
         pretrained=initialize_from_pretrained,
         small_anchors=args.experiment == "F2",
-        crowded_proposals=args.experiment == "F3",
+        crowded_proposals=args.experiment in {"F3", "F4"},
+        model_version="v2" if args.experiment == "F4" else "v1",
         min_size=min_size,
         max_size=max_size,
     ).to(device)
@@ -283,6 +290,7 @@ def main() -> None:
             device,
             scaler=scaler,
             max_batches=max_batches,
+            accumulation_steps=accumulation_steps,
         )
         scheduler.step()
         should_evaluate = (epoch + 1) % args.eval_every == 0 or epoch + 1 == effective_epochs

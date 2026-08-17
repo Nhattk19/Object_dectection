@@ -148,16 +148,20 @@ def build_faster_rcnn(
     max_size: int = 1333,
     crowded_proposals: bool = False,
     box_detections_per_img: int = 100,
+    model_version: str = "v1",
 ):
     """Build Faster R-CNN ResNet-50-FPN for VisDrone.
 
     ``small_anchors=False`` is the F0/F1 baseline. Enable it only in the F2
-    anchor ablation. Likewise, crowded proposal limits belong to F3.
+    anchor ablation. Crowded proposal limits belong to F3/F4; F4 additionally
+    selects Torchvision's improved ``v2`` detector recipe.
     """
 
     from torchvision.models.detection import (
         FasterRCNN_ResNet50_FPN_Weights,
+        FasterRCNN_ResNet50_FPN_V2_Weights,
         fasterrcnn_resnet50_fpn,
+        fasterrcnn_resnet50_fpn_v2,
     )
     from torchvision.models.detection.anchor_utils import AnchorGenerator
     from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
@@ -179,10 +183,19 @@ def build_faster_rcnn(
             rpn_post_nms_top_n_test=1000,
         )
 
-    weights = FasterRCNN_ResNet50_FPN_Weights.DEFAULT if pretrained else None
+    if model_version not in {"v1", "v2"}:
+        raise ValueError(f"model_version must be 'v1' or 'v2', got {model_version!r}")
+    if model_version == "v2":
+        model_builder = fasterrcnn_resnet50_fpn_v2
+        weights_enum = FasterRCNN_ResNet50_FPN_V2_Weights
+    else:
+        model_builder = fasterrcnn_resnet50_fpn
+        weights_enum = FasterRCNN_ResNet50_FPN_Weights
+
+    weights = weights_enum.DEFAULT if pretrained else None
     if not pretrained:
         model_kwargs["weights_backbone"] = None
-    model = fasterrcnn_resnet50_fpn(weights=weights, **model_kwargs)
+    model = model_builder(weights=weights, **model_kwargs)
     input_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(input_features, num_classes)
     return model
@@ -203,13 +216,20 @@ def train_one_epoch(
     *,
     scaler=None,
     max_batches: Optional[int] = None,
+    accumulation_steps: int = 1,
 ) -> dict[str, float]:
-    """Train one epoch and return mean component/total losses."""
+    """Train one epoch and return mean component/total losses.
+
+    Gradient accumulation lets memory-constrained runs retain a larger
+    effective batch size. Reported losses remain unscaled.
+    """
 
     import torch
     from tqdm.auto import tqdm
 
     model.train()
+    if accumulation_steps < 1:
+        raise ValueError("accumulation_steps must be positive")
     totals: dict[str, float] = defaultdict(float)
     batches = 0
     start = time.perf_counter()
@@ -218,12 +238,12 @@ def train_one_epoch(
     if max_batches is not None:
         total_batches = min(total_batches, max_batches)
     progress = tqdm(data_loader, total=total_batches, desc="train", leave=False)
+    optimizer.zero_grad(set_to_none=True)
     for batch_index, (images, targets) in enumerate(progress):
         if batch_index >= total_batches:
             break
         images = [image.to(device, non_blocking=True) for image in images]
         targets = move_targets_to_device(targets, device)
-        optimizer.zero_grad(set_to_none=True)
         amp_context = (
             torch.autocast(device_type="cuda", dtype=torch.float16)
             if amp_enabled
@@ -234,13 +254,22 @@ def train_one_epoch(
             loss = sum(loss_dict.values())
         if not torch.isfinite(loss):
             raise RuntimeError(f"Non-finite loss encountered: {float(loss.detach())}")
+        backward_loss = loss / accumulation_steps
         if amp_enabled:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(backward_loss).backward()
         else:
-            loss.backward()
-            optimizer.step()
+            backward_loss.backward()
+        should_step = (
+            (batch_index + 1) % accumulation_steps == 0
+            or batch_index + 1 == total_batches
+        )
+        if should_step:
+            if amp_enabled:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         for name, value in loss_dict.items():
             totals[name] += float(value.detach())
         totals["loss_total"] += float(loss.detach())

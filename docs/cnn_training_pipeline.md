@@ -196,7 +196,27 @@ RESUME_FROM = None
 F3 không resume F0/F1/F2. Output được lưu tại
 `/kaggle/working/faster_rcnn_runs/f3/`.
 
-## 8. Lệnh tương đương notebook
+## 8. Chạy F4 với Faster R-CNN V2
+
+F4 giữ RPN proposal limits của F3 nhưng đổi sang
+`fasterrcnn_resnet50_fpn_v2` pretrained COCO. Model nặng hơn nên notebook đặt
+batch size 1; training script tự tích lũy gradient 2 bước để giữ effective
+batch size 2.
+
+```python
+EXPERIMENT = "F4"
+BATCH_SIZE = 1
+RUN_SMOKE_FIRST = True
+TRAIN_FULL = True
+EPOCHS = 25
+RESUME_FROM = None
+```
+
+F4 khởi tạo độc lập, không resume checkpoint F0–F3 vì model khác nhau. Output
+được lưu tại `/kaggle/working/faster_rcnn_runs/f4/`. Khi tiếp tục chính F4 ở
+session sau, Add Input output F4 cũ và đặt `RESUME_FROM` tới `f4/last.pth`.
+
+## 9. Lệnh tương đương notebook
 
 Nếu muốn chạy trực tiếp trong Kaggle terminal:
 

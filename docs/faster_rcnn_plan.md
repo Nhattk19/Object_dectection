@@ -117,8 +117,9 @@ xuống `±5°`. Không thêm Mosaic/tiling để “cứu” F1 trước khi t�
 | F1 | F0 + augmentation | Augmentation có cải thiện generalization? |
 | F2 | F0 + anchor 8–128 | Anchor nhỏ có tăng AP_small/recall? |
 | F3 | F0 + tăng RPN proposals | Có giảm bỏ sót ảnh crowded? |
-| F4 | Cấu hình tốt nhất + input 1024 | Resolution lớn có đáng chi phí GPU? |
-| F5 | Tiling 640, overlap 20% | Tiling cải thiện small object bao nhiêu? |
+| F4 | F3 + Faster R-CNN ResNet-50-FPN V2 | Recipe V2 có tăng chất lượng tổng thể? |
+| F5 | Cấu hình tốt nhất + input 1024 | Resolution lớn có đáng chi phí GPU? |
+| F6 | Tiling 640, overlap 20% | Tiling cải thiện small object bao nhiêu? |
 
 F2 trở đi chỉ chạy sau khi F0 và F1 đã có kết quả. Vì F1 làm giảm mAP tổng và
 AP_small trong lần chạy seed 42, F2 quay lại F0 rồi chỉ đổi anchor. F2 tăng
