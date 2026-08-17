@@ -5,8 +5,9 @@ The original VisDrone annotation format is::
     x, y, width, height, score, category, truncation, occlusion
 
 Categories 1..10 are trainable objects. Category 0 (ignored region), category
-11 (others), and rows with score 0 are intentionally excluded from YOLO labels.
-The source dataset is never modified by this module.
+11 (others), and rows with score 0 are intentionally excluded. Preprocessing
+writes a model-neutral JSONL manifest; format-specific conversion lives in the
+YOLO and DETR converter modules. The source dataset is never modified.
 """
 
 from __future__ import annotations
@@ -58,14 +59,14 @@ class Annotation:
 
 
 @dataclass
-class ConversionStats:
+class PreprocessingStats:
     split: str
     images_found: int = 0
     annotations_found: int = 0
     images_written: int = 0
-    label_files_written: int = 0
+    records_written: int = 0
     rows_total: int = 0
-    rows_written: int = 0
+    objects_written: int = 0
     ignored_score: int = 0
     ignored_category: int = 0
     malformed_rows: int = 0
@@ -177,19 +178,6 @@ def clip_xywh(
     return x1, y1, x2 - x1, y2 - y1
 
 
-def xywh_to_yolo(
-    box: tuple[float, float, float, float], image_width: int, image_height: int
-) -> tuple[float, float, float, float]:
-    """Convert clipped top-left xywh pixels to normalized YOLO center xywh."""
-    x, y, width, height = box
-    return (
-        (x + width / 2.0) / image_width,
-        (y + height / 2.0) / image_height,
-        width / image_width,
-        height / image_height,
-    )
-
-
 def evaluate_annotation(
     annotation: Annotation,
     image_width: int,
@@ -218,7 +206,8 @@ def _image_map(image_dir: Path) -> dict[str, Path]:
     return {path.stem: path for path in list_images(image_dir)}
 
 
-def _materialize_image(source: Path, destination: Path, mode: str) -> None:
+def materialize_image(source: Path, destination: Path, mode: str) -> None:
+    """Copy or link an image without replacing an existing destination."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         return
@@ -235,7 +224,53 @@ def _materialize_image(source: Path, destination: Path, mode: str) -> None:
         raise ValueError("image_mode must be one of: hardlink, copy, symlink, none")
 
 
-def convert_split(
+def iter_processed_records(
+    processed_root: Path | str, split: str
+):
+    """Yield validated records from one model-neutral JSONL split."""
+    annotation_path = Path(processed_root) / "annotations" / f"{split}.jsonl"
+    if not annotation_path.is_file():
+        raise FileNotFoundError(
+            f"Missing processed annotations for split {split!r}: {annotation_path}"
+        )
+    with annotation_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Invalid JSON in {annotation_path} at line {line_number}: {error}"
+                ) from error
+            required = {"image_id", "file_name", "width", "height", "objects"}
+            missing = required - set(record)
+            if missing:
+                raise ValueError(
+                    f"Record {line_number} in {annotation_path} is missing {sorted(missing)}"
+                )
+            yield record
+
+
+def load_processed_manifest(processed_root: Path | str) -> dict:
+    """Load and validate the model-neutral dataset manifest."""
+    manifest_path = Path(processed_root) / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Missing {manifest_path}. Run preprocess_visdrone.py first."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("format") != "visdrone-clean-jsonl" or manifest.get("version") != 1:
+        raise ValueError(
+            f"Unsupported processed dataset format in {manifest_path}: "
+            f"{manifest.get('format')!r} version {manifest.get('version')!r}"
+        )
+    if manifest.get("bbox_format") != "xywh_absolute":
+        raise ValueError("Processed bounding boxes must use xywh_absolute format")
+    return manifest
+
+
+def preprocess_split(
     source_split_dir: Path | str,
     output_root: Path | str,
     split: str,
@@ -244,8 +279,8 @@ def convert_split(
     min_box_height: float = 1.0,
     image_mode: str = "hardlink",
     dry_run: bool = False,
-) -> ConversionStats:
-    """Validate and convert one original VisDrone split into YOLO layout."""
+) -> PreprocessingStats:
+    """Validate one raw split and write model-neutral image records as JSONL."""
     source = Path(source_split_dir)
     output = Path(output_root)
     image_dir = source / "images"
@@ -256,7 +291,7 @@ def convert_split(
         if annotation_dir.is_dir() else {}
     )
 
-    stats = ConversionStats(
+    stats = PreprocessingStats(
         split=split,
         images_found=len(images),
         annotations_found=len(annotation_files),
@@ -264,7 +299,8 @@ def convert_split(
         missing_images=len(set(annotation_files) - set(images)),
     )
 
-    for stem, image_path in images.items():
+    records: list[dict] = []
+    for image_id, (stem, image_path) in enumerate(images.items(), start=1):
         annotation_path = annotation_files.get(stem)
         if annotation_path is None:
             continue
@@ -278,7 +314,7 @@ def convert_split(
         annotations, malformed = read_annotation_file(annotation_path)
         stats.malformed_rows += malformed
         stats.rows_total += len(annotations) + malformed
-        output_lines: list[str] = []
+        objects: list[dict] = []
         for annotation in annotations:
             status, clipped, was_clipped = evaluate_annotation(
                 annotation,
@@ -293,42 +329,47 @@ def convert_split(
             assert clipped is not None
             if was_clipped:
                 stats.clipped_boxes += 1
-            yolo_box = xywh_to_yolo(clipped, image_width, image_height)
-            values = " ".join(f"{value:.6f}" for value in yolo_box)
-            output_lines.append(f"{annotation.category - 1} {values}\n")
+            x, y, width, height = clipped
+            objects.append(
+                {
+                    "category_id": annotation.category - 1,
+                    "bbox": [x, y, width, height],
+                    "area": width * height,
+                    "truncation": annotation.truncation,
+                    "occlusion": annotation.occlusion,
+                }
+            )
 
-        stats.rows_written += len(output_lines)
+        stats.objects_written += len(objects)
+        record = {
+            "image_id": image_id,
+            "file_name": image_path.name,
+            "width": image_width,
+            "height": image_height,
+            "objects": objects,
+        }
+        records.append(record)
         if not dry_run:
-            label_path = output / "labels" / split / f"{stem}.txt"
-            label_path.parent.mkdir(parents=True, exist_ok=True)
-            label_path.write_text("".join(output_lines), encoding="utf-8")
             destination = output / "images" / split / image_path.name
-            _materialize_image(image_path, destination, image_mode)
+            materialize_image(image_path, destination, image_mode)
             stats.images_written += 1
-            stats.label_files_written += 1
+            stats.records_written += 1
+
+    if not dry_run:
+        annotation_path = output / "annotations" / f"{split}.jsonl"
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
+        annotation_path.write_text(
+            "".join(
+                json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                for record in records
+            ),
+            encoding="utf-8",
+        )
 
     return stats
 
 
-def write_dataset_yaml(output_root: Path | str, yaml_path: Path | str | None = None) -> Path:
-    """Write an Ultralytics-compatible YAML for the processed dataset."""
-    import yaml
-
-    output = Path(output_root).resolve()
-    target = Path(yaml_path) if yaml_path else output / "visdrone_yolo.yaml"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "path": output.as_posix(),
-        "train": "images/train",
-        "val": "images/val",
-        "test": "images/test-dev",
-        "names": {index - 1: name for index, name in CLASS_NAMES.items()},
-    }
-    target.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    return target
-
-
-def prepare_dataset(
+def preprocess_dataset(
     data_root: Path | str,
     output_root: Path | str,
     splits: Sequence[str] = ("train", "val", "test-dev"),
@@ -337,13 +378,13 @@ def prepare_dataset(
     min_box_height: float = 1.0,
     image_mode: str = "hardlink",
     dry_run: bool = False,
-) -> list[ConversionStats]:
-    """Discover, validate, and convert multiple splits."""
-    reports: list[ConversionStats] = []
+) -> list[PreprocessingStats]:
+    """Validate raw splits and create one reusable, model-neutral dataset."""
+    reports: list[PreprocessingStats] = []
     for split in splits:
         source = resolve_split_dir(data_root, split)
         reports.append(
-            convert_split(
+            preprocess_split(
                 source,
                 output_root,
                 split,
@@ -354,8 +395,20 @@ def prepare_dataset(
             )
         )
     if not dry_run:
-        write_dataset_yaml(output_root)
-        report_path = Path(output_root) / "preprocessing_report.json"
+        output = Path(output_root)
+        output.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "format": "visdrone-clean-jsonl",
+            "version": 1,
+            "bbox_format": "xywh_absolute",
+            "classes": {index - 1: name for index, name in CLASS_NAMES.items()},
+            "splits": list(splits),
+        }
+        (output / "dataset_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        report_path = output / "preprocessing_report.json"
         report_path.write_text(
             json.dumps([asdict(report) for report in reports], indent=2, ensure_ascii=False),
             encoding="utf-8",

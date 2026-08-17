@@ -18,3 +18,5 @@ data/*
 !data/*.yaml
 !data/*.yml
 !data/*.ipynb
+nb/ 
+test/
