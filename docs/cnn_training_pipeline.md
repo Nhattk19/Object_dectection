@@ -216,7 +216,21 @@ F4 khởi tạo độc lập, không resume checkpoint F0–F3 vì model khác n
 được lưu tại `/kaggle/working/faster_rcnn_runs/f4/`. Khi tiếp tục chính F4 ở
 session sau, Add Input output F4 cũ và đặt `RESUME_FROM` tới `f4/last.pth`.
 
-## 9. Lệnh tương đương notebook
+## 9. Đánh giá official-compatible sau khi train
+
+Không cần train lại checkpoint cũ. Mở
+`models/evaluate_visdrone_checkpoints.ipynb` và Add Input:
+
+1. processed VisDrone dùng khi train;
+2. raw `VisDrone2019-DET-val` còn nguyên `images/` và `annotations/*.txt`;
+3. Kaggle Output có `best.pth` của F0–F5.
+
+Notebook chạy inference lại với tối đa 500 detections/ảnh, loại ignore regions
+và tính AP/AR tương thích VisDrone2018-DET-toolkit. Kết quả nằm trong
+`/kaggle/working/visdrone_official_eval/<experiment>/visdrone_metrics.json`.
+Đây chỉ là evaluation; không load optimizer và không cập nhật trọng số.
+
+## 10. Lệnh tương đương notebook
 
 Nếu muốn chạy trực tiếp trong Kaggle terminal:
 

@@ -148,6 +148,7 @@ def build_faster_rcnn(
     max_size: int = 1333,
     crowded_proposals: bool = False,
     box_detections_per_img: int = 100,
+    box_score_thresh: float = 0.05,
     model_version: str = "v1",
 ):
     """Build Faster R-CNN ResNet-50-FPN for VisDrone.
@@ -170,6 +171,7 @@ def build_faster_rcnn(
         "min_size": min_size,
         "max_size": max_size,
         "box_detections_per_img": box_detections_per_img,
+        "box_score_thresh": box_score_thresh,
     }
     if small_anchors:
         sizes = ((8,), (16,), (32,), (64,), (128,))
