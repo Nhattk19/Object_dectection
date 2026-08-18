@@ -28,6 +28,7 @@ from faster_rcnn import (
     seed_detection_worker,
     train_one_epoch,
 )
+from visdrone_evaluation import evaluate_visdrone, export_visdrone_predictions
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-size", type=int, default=800)
     parser.add_argument("--max-size", type=int, default=1333)
+    parser.add_argument(
+        "--raw-val-root",
+        type=Path,
+        help="Raw VisDrone val root with images/ and annotations/; required by F5+.",
+    )
     parser.add_argument("--eval-every", type=int, default=1)
     parser.add_argument(
         "--resume",
@@ -120,7 +126,11 @@ def write_history(history: list[dict], run_dir: Path) -> None:
 
     figure, axes = plt.subplots(1, 2, figsize=(13, 4))
     frame.plot(x="epoch", y="loss_total", marker="o", ax=axes[0], title="Train loss")
-    metric_columns = [name for name in ("map", "map_50", "map_small") if name in frame]
+    metric_columns = [
+        name
+        for name in ("visdrone_ap", "visdrone_ap50", "visdrone_ap75", "map", "map_50")
+        if name in frame
+    ]
     if metric_columns:
         frame.plot(
             x="epoch", y=metric_columns, marker="o", ax=axes[1], title="Validation COCO"
@@ -169,6 +179,7 @@ def main() -> None:
     max_batches = 2 if args.smoke_test else None
     pretrained = not args.smoke_test and not args.no_pretrained
     initialize_from_pretrained = pretrained and not args.resume
+    use_visdrone_evaluator = args.experiment == "F5" and not args.smoke_test
     accumulation_steps = (
         2
         if not args.smoke_test
@@ -176,6 +187,13 @@ def main() -> None:
         and batch_size == 1
         else 1
     )
+    raw_val_root = args.raw_val_root.expanduser().resolve() if args.raw_val_root else None
+    if use_visdrone_evaluator:
+        if raw_val_root is None:
+            raise ValueError("F5 requires --raw-val-root for VisDrone toolkit evaluation")
+        for required in (raw_val_root / "images", raw_val_root / "annotations"):
+            if not required.is_dir():
+                raise FileNotFoundError(required)
 
     config = {
         "experiment": args.experiment,
@@ -195,6 +213,9 @@ def main() -> None:
         "small_anchors": args.experiment == "F2",
         "crowded_proposals": args.experiment in {"F3", "F4", "F5"},
         "model_version": "v2" if args.experiment in {"F4", "F5"} else "v1",
+        "evaluator": "visdrone_det" if use_visdrone_evaluator else "coco",
+        "selection_metric": "visdrone_ap" if use_visdrone_evaluator else "map",
+        "raw_val_root": str(raw_val_root) if raw_val_root else None,
         "device": str(device),
         "smoke_test": args.smoke_test,
     }
@@ -240,6 +261,8 @@ def main() -> None:
         model_version="v2" if args.experiment in {"F4", "F5"} else "v1",
         min_size=min_size,
         max_size=max_size,
+        box_detections_per_img=500 if use_visdrone_evaluator else 100,
+        box_score_thresh=0.001 if use_visdrone_evaluator else 0.05,
     ).to(device)
     parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     learning_rate = 0.0025 if batch_size <= 2 else 0.005
@@ -281,7 +304,10 @@ def main() -> None:
         start_epoch = metadata["epoch"]
         history = list(metadata["history"])
         best_map = metadata["best_map"]
-        print(f"Resumed {resume_path} at epoch {start_epoch}; best mAP={best_map:.4f}")
+        print(
+            f"Resumed {resume_path} at epoch {start_epoch}; "
+            f"best {config['selection_metric']}={best_map:.4f}"
+        )
 
     if start_epoch >= effective_epochs:
         print(f"Checkpoint already reached {start_epoch}/{effective_epochs} epochs; nothing to train.")
@@ -298,11 +324,20 @@ def main() -> None:
         )
         scheduler.step()
         should_evaluate = (epoch + 1) % args.eval_every == 0 or epoch + 1 == effective_epochs
-        val_metrics = (
-            evaluate_coco(model, val_loader, val_json, device, max_batches=max_batches)
-            if should_evaluate
-            else {}
-        )
+        if should_evaluate and use_visdrone_evaluator:
+            assert raw_val_root is not None
+            prediction_dir = export_visdrone_predictions(
+                model, val_loader, val_dataset, device, run_dir / "visdrone_predictions"
+            )
+            val_metrics = evaluate_visdrone(
+                raw_val_root / "annotations", prediction_dir, raw_val_root / "images"
+            )
+        elif should_evaluate:
+            val_metrics = evaluate_coco(
+                model, val_loader, val_json, device, max_batches=max_batches
+            )
+        else:
+            val_metrics = {}
         row = {
             "epoch": epoch + 1,
             "lr": optimizer.param_groups[0]["lr"],
@@ -310,7 +345,8 @@ def main() -> None:
             **val_metrics,
         }
         history.append(row)
-        current_map = float(val_metrics.get("map", -1.0))
+        selection_metric = config["selection_metric"]
+        current_map = float(val_metrics.get(selection_metric, -1.0))
         best_map = max(best_map, current_map)
         print(json.dumps(row, ensure_ascii=False), flush=True)
         checkpoint_args = dict(
@@ -336,6 +372,7 @@ def main() -> None:
         "experiment": args.experiment,
         "completed_epochs": start_epoch if start_epoch >= effective_epochs else effective_epochs,
         "best_map": best_map,
+        "selection_metric": config["selection_metric"],
         "peak_vram_gb": peak_vram_gb,
         "last_metrics": history[-1] if history else {},
         "run_dir": str(run_dir),

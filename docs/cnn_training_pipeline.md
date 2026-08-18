@@ -220,6 +220,8 @@ session sau, Add Input output F4 cũ và đặt `RESUME_FROM` tới `f4/last.pth
 
 F5 giữ model V2 và crowded proposals của F4, chỉ tăng resize từ `800/1333`
 lên `1024/1707`. Notebook dùng batch size 1 và gradient accumulation 2 bước.
+Từ F5, validation dùng evaluator VisDrone DET sau mỗi epoch, xuất tối đa 500
+detections/ảnh và chọn `best.pth` theo `visdrone_ap` thay vì COCO `map`.
 
 ```python
 EXPERIMENT = "F5"
@@ -228,6 +230,9 @@ MAX_SIZE = 1707
 BATCH_SIZE = 1
 RESUME_FROM = None
 ```
+
+Ngoài processed dataset, F5 bắt buộc Add Input raw `VisDrone2019-DET-val` còn
+nguyên `images/` và `annotations/*.txt` để evaluator xử lý ignore regions.
 
 F5 mới phải bắt đầu với `RESUME_FROM=None` để so sánh công bằng với F4. Chỉ
 resume từ `f5/last.pth` nếu cùng lần train F5 bị ngắt giữa chừng; không resume

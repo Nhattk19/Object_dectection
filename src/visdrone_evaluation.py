@@ -18,6 +18,51 @@ IOU_THRESHOLDS = np.arange(0.50, 0.96, 0.05)
 MAX_DETECTIONS = (1, 10, 100, 500)
 
 
+def export_visdrone_predictions(
+    model,
+    data_loader,
+    dataset,
+    device,
+    output_root: Path | str,
+) -> Path:
+    """Run inference and write one official-format TXT file per image."""
+
+    import torch
+    from tqdm.auto import tqdm
+
+    output = Path(output_root)
+    output.mkdir(parents=True, exist_ok=True)
+    image_names = {
+        int(item["id"]): Path(item["file_name"]).stem for item in dataset.images
+    }
+    model.eval()
+    with torch.inference_mode():
+        for images, targets in tqdm(data_loader, desc="VisDrone validation", leave=False):
+            predictions = model(
+                [image.to(device, non_blocking=True) for image in images]
+            )
+            for prediction, target in zip(predictions, targets):
+                image_id = int(target["image_id"].item())
+                lines: list[str] = []
+                for box, score, label in zip(
+                    prediction["boxes"].cpu(),
+                    prediction["scores"].cpu(),
+                    prediction["labels"].cpu(),
+                ):
+                    class_id = int(label)
+                    if not 1 <= class_id <= 10:
+                        continue
+                    x1, y1, x2, y2 = map(float, box)
+                    lines.append(
+                        f"{x1:.4f},{y1:.4f},{x2-x1:.4f},{y2-y1:.4f},"
+                        f"{float(score):.8f},{class_id},-1,-1\n"
+                    )
+                (output / f"{image_names[image_id]}.txt").write_text(
+                    "".join(lines), encoding="utf-8"
+                )
+    return output
+
+
 def _read_rows(path: Path) -> np.ndarray:
     rows: list[list[float]] = []
     if not path.is_file():
@@ -79,22 +124,21 @@ def _drop_objects_in_ignore_regions(
 
 
 def _overlap_matrix(detections: np.ndarray, ground_truth: np.ndarray) -> np.ndarray:
-    overlaps = np.zeros((len(detections), len(ground_truth)), dtype=np.float64)
-    for det_index, det in enumerate(detections):
-        det_area = det[2] * det[3]
-        for gt_index, gt in enumerate(ground_truth):
-            width = min(det[0] + det[2], gt[0] + gt[2]) - max(det[0], gt[0])
-            height = min(det[1] + det[3], gt[1] + gt[3]) - max(det[1], gt[1])
-            if width <= 0 or height <= 0:
-                continue
-            intersection = width * height
-            union = (
-                det_area
-                if bool(gt[4])
-                else det_area + gt[2] * gt[3] - intersection
-            )
-            overlaps[det_index, gt_index] = intersection / max(union, 1e-12)
-    return overlaps
+    if not len(detections) or not len(ground_truth):
+        return np.zeros((len(detections), len(ground_truth)), dtype=np.float64)
+    det_xy1 = detections[:, None, :2]
+    gt_xy1 = ground_truth[None, :, :2]
+    det_xy2 = det_xy1 + detections[:, None, 2:4]
+    gt_xy2 = gt_xy1 + ground_truth[None, :, 2:4]
+    intersection_wh = np.maximum(
+        0.0, np.minimum(det_xy2, gt_xy2) - np.maximum(det_xy1, gt_xy1)
+    )
+    intersection = intersection_wh[..., 0] * intersection_wh[..., 1]
+    det_area = detections[:, None, 2] * detections[:, None, 3]
+    gt_area = ground_truth[None, :, 2] * ground_truth[None, :, 3]
+    union = det_area + gt_area - intersection
+    union = np.where(ground_truth[None, :, 4].astype(bool), det_area, union)
+    return intersection / np.maximum(union, 1e-12)
 
 
 def _match_image(
