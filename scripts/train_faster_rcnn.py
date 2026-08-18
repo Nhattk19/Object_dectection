@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=PROJECT_ROOT / "models" / "checkpoints",
     )
     parser.add_argument(
-        "--experiment", choices=["F0", "F1", "F2", "F3", "F4"], default="F0"
+        "--experiment", choices=["F0", "F1", "F2", "F3", "F4", "F5"], default="F0"
     )
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -170,7 +170,11 @@ def main() -> None:
     pretrained = not args.smoke_test and not args.no_pretrained
     initialize_from_pretrained = pretrained and not args.resume
     accumulation_steps = (
-        2 if not args.smoke_test and args.experiment == "F4" and batch_size == 1 else 1
+        2
+        if not args.smoke_test
+        and args.experiment in {"F4", "F5"}
+        and batch_size == 1
+        else 1
     )
 
     config = {
@@ -189,8 +193,8 @@ def main() -> None:
         "initialize_from_pretrained_this_run": initialize_from_pretrained,
         "augmentation": args.experiment == "F1",
         "small_anchors": args.experiment == "F2",
-        "crowded_proposals": args.experiment in {"F3", "F4"},
-        "model_version": "v2" if args.experiment == "F4" else "v1",
+        "crowded_proposals": args.experiment in {"F3", "F4", "F5"},
+        "model_version": "v2" if args.experiment in {"F4", "F5"} else "v1",
         "device": str(device),
         "smoke_test": args.smoke_test,
     }
@@ -232,8 +236,8 @@ def main() -> None:
     model = build_faster_rcnn(
         pretrained=initialize_from_pretrained,
         small_anchors=args.experiment == "F2",
-        crowded_proposals=args.experiment in {"F3", "F4"},
-        model_version="v2" if args.experiment == "F4" else "v1",
+        crowded_proposals=args.experiment in {"F3", "F4", "F5"},
+        model_version="v2" if args.experiment in {"F4", "F5"} else "v1",
         min_size=min_size,
         max_size=max_size,
     ).to(device)

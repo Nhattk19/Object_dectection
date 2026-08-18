@@ -216,7 +216,24 @@ F4 khởi tạo độc lập, không resume checkpoint F0–F3 vì model khác n
 được lưu tại `/kaggle/working/faster_rcnn_runs/f4/`. Khi tiếp tục chính F4 ở
 session sau, Add Input output F4 cũ và đặt `RESUME_FROM` tới `f4/last.pth`.
 
-## 9. Đánh giá official-compatible sau khi train
+## 9. Chạy F5 ở độ phân giải cao hơn
+
+F5 giữ model V2 và crowded proposals của F4, chỉ tăng resize từ `800/1333`
+lên `1024/1707`. Notebook dùng batch size 1 và gradient accumulation 2 bước.
+
+```python
+EXPERIMENT = "F5"
+MIN_SIZE = 1024
+MAX_SIZE = 1707
+BATCH_SIZE = 1
+RESUME_FROM = None
+```
+
+F5 mới phải bắt đầu với `RESUME_FROM=None` để so sánh công bằng với F4. Chỉ
+resume từ `f5/last.pth` nếu cùng lần train F5 bị ngắt giữa chừng; không resume
+từ checkpoint F4.
+
+## 10. Đánh giá official-compatible sau khi train
 
 Không cần train lại checkpoint cũ. Mở
 `models/evaluate_visdrone_checkpoints.ipynb` và Add Input:
@@ -230,7 +247,7 @@ và tính AP/AR tương thích VisDrone2018-DET-toolkit. Kết quả nằm trong
 `/kaggle/working/visdrone_official_eval/<experiment>/visdrone_metrics.json`.
 Đây chỉ là evaluation; không load optimizer và không cập nhật trọng số.
 
-## 10. Lệnh tương đương notebook
+## 11. Lệnh tương đương notebook
 
 Nếu muốn chạy trực tiếp trong Kaggle terminal:
 
