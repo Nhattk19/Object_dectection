@@ -22,7 +22,11 @@ from visdrone_evaluation import evaluate_visdrone  # noqa: E402
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        help="Optional processed COCO root; raw validation images are used when omitted.",
+    )
     parser.add_argument("--raw-val-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=2)
@@ -31,10 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    import torch
-    from tqdm.auto import tqdm
-
     args = build_parser().parse_args()
+
+    import torch
+    from PIL import Image
+    from tqdm.auto import tqdm
+    from torchvision.transforms.functional import pil_to_tensor
+
     if not torch.cuda.is_available():
         raise RuntimeError("Evaluation requires a Kaggle GPU")
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -48,13 +55,10 @@ def main() -> None:
     )
     small_anchors = bool(config.get("small_anchors", experiment == "F2"))
 
-    data_root = args.data_root.resolve()
     raw_val_root = args.raw_val_root.resolve()
     raw_annotations = raw_val_root / "annotations"
     raw_images = raw_val_root / "images"
-    val_json = data_root / "annotations" / "instances_val.json"
-    image_root = data_root / "images"
-    for required in (args.checkpoint, val_json, image_root, raw_annotations, raw_images):
+    for required in (args.checkpoint, raw_annotations, raw_images):
         if not required.exists():
             raise FileNotFoundError(required)
 
@@ -72,7 +76,34 @@ def main() -> None:
     model.load_state_dict(checkpoint["model"])
     model.to(device).eval()
 
-    dataset = VisDroneCocoDataset(val_json, image_root)
+    if args.data_root:
+        data_root = args.data_root.resolve()
+        val_json = data_root / "annotations" / "instances_val.json"
+        image_root = data_root / "images"
+        for required in (val_json, image_root):
+            if not required.exists():
+                raise FileNotFoundError(required)
+        dataset = VisDroneCocoDataset(val_json, image_root)
+    else:
+        class RawVisDroneImageDataset(torch.utils.data.Dataset):
+            def __init__(self, root: Path) -> None:
+                self.paths = sorted(root.glob("*.jpg"))
+                if not self.paths:
+                    raise FileNotFoundError(f"No JPG images found in {root}")
+                self.images = [
+                    {"id": index, "file_name": path.name}
+                    for index, path in enumerate(self.paths, start=1)
+                ]
+
+            def __len__(self) -> int:
+                return len(self.paths)
+
+            def __getitem__(self, index: int):
+                image = Image.open(self.paths[index]).convert("RGB")
+                tensor = pil_to_tensor(image).to(dtype=torch.float32).div(255.0)
+                return tensor, {"image_id": torch.tensor(index + 1, dtype=torch.int64)}
+
+        dataset = RawVisDroneImageDataset(raw_images)
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=1,
