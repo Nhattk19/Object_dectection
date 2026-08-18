@@ -219,14 +219,16 @@ session sau, Add Input output F4 cũ và đặt `RESUME_FROM` tới `f4/last.pth
 ## 9. Chạy F5 ở độ phân giải cao hơn
 
 F5 giữ model V2 và crowded proposals của F4, chỉ tăng resize từ `800/1333`
-lên `1024/1707`. Notebook dùng batch size 1 và gradient accumulation 2 bước.
+lên `896/1493`. Mức `1024/1707` đã OOM trên T4 khi gặp ảnh cực crowded;
+`896/1493` vẫn tăng 25% số pixel so với F4 nhưng giữ khoảng trống VRAM an toàn
+hơn. Notebook dùng batch size 1 và gradient accumulation 2 bước.
 Từ F5, validation dùng evaluator VisDrone DET sau mỗi epoch, xuất tối đa 500
 detections/ảnh và chọn `best.pth` theo `visdrone_ap` thay vì COCO `map`.
 
 ```python
 EXPERIMENT = "F5"
-MIN_SIZE = 1024
-MAX_SIZE = 1707
+MIN_SIZE = 896
+MAX_SIZE = 1493
 BATCH_SIZE = 1
 RESUME_FROM = None
 ```
