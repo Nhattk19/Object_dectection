@@ -23,5 +23,6 @@ data/*
 # Training artifacts are reproducible and too large for Git.
 models/checkpoints/
 models/runs/
+models/f5_best_tiled_experiment/
 *.pth
 *.pt
