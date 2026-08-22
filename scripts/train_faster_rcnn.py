@@ -132,8 +132,13 @@ def write_history(history: list[dict], run_dir: Path) -> None:
         if name in frame
     ]
     if metric_columns:
+        validation_title = (
+            "Validation VisDrone"
+            if any(name.startswith("visdrone_") for name in metric_columns)
+            else "Validation COCO"
+        )
         frame.plot(
-            x="epoch", y=metric_columns, marker="o", ax=axes[1], title="Validation COCO"
+            x="epoch", y=metric_columns, marker="o", ax=axes[1], title=validation_title
         )
     axes[0].grid(alpha=0.3)
     axes[1].grid(alpha=0.3)

@@ -16,6 +16,7 @@ from faster_rcnn import (  # noqa: E402
     build_faster_rcnn,
     detection_collate_fn,
 )
+from tiled_inference import tiled_predict  # noqa: E402
 from visdrone_evaluation import evaluate_visdrone  # noqa: E402
 
 
@@ -31,6 +32,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--score-threshold", type=float, default=0.001)
+    parser.add_argument(
+        "--run-name",
+        help="Output subdirectory; defaults to the lower-case experiment name.",
+    )
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        help="Enable tiled inference with square tiles of this many pixels.",
+    )
+    parser.add_argument("--tile-overlap", type=float, default=0.20)
+    parser.add_argument("--tile-batch-size", type=int, default=1)
+    parser.add_argument("--merge-nms-iou", type=float, default=0.50)
+    parser.add_argument("--pre-nms-topk", type=int, default=10_000)
     return parser
 
 
@@ -116,13 +130,29 @@ def main() -> None:
     image_names = {
         int(item["id"]): Path(item["file_name"]).stem for item in dataset.images
     }
-    run_dir = args.output_dir.resolve() / experiment.lower()
+    run_name = args.run_name or experiment.lower()
+    run_dir = args.output_dir.resolve() / run_name
     prediction_dir = run_dir / "visdrone_predictions"
     prediction_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.inference_mode():
         for images, targets in tqdm(loader, desc=f"{experiment} inference"):
-            output = model([image.to(device, non_blocking=True) for image in images])[0]
+            if args.tile_size:
+                output = tiled_predict(
+                    model,
+                    images[0],
+                    device,
+                    tile_size=args.tile_size,
+                    overlap=args.tile_overlap,
+                    tile_batch_size=args.tile_batch_size,
+                    merge_nms_iou=args.merge_nms_iou,
+                    max_detections=500,
+                    pre_nms_topk=args.pre_nms_topk,
+                )
+            else:
+                output = model(
+                    [image.to(device, non_blocking=True) for image in images]
+                )[0]
             image_id = int(targets[0]["image_id"].item())
             lines: list[str] = []
             for box, score, label in zip(
@@ -146,8 +176,15 @@ def main() -> None:
         "checkpoint": str(args.checkpoint.resolve()),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "model_version": model_version,
+        "evaluation_variant": "tiled" if args.tile_size else "full_image",
+        "run_name": run_name,
         "max_detections_per_image": 500,
         "score_threshold": args.score_threshold,
+        "tile_size": args.tile_size,
+        "tile_overlap": args.tile_overlap if args.tile_size else None,
+        "tile_batch_size": args.tile_batch_size if args.tile_size else None,
+        "merge_nms_iou": args.merge_nms_iou if args.tile_size else None,
+        "pre_nms_topk": args.pre_nms_topk if args.tile_size else None,
         **metrics,
     }
     (run_dir / "visdrone_metrics.json").write_text(
