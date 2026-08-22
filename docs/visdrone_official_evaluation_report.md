@@ -8,7 +8,7 @@
 
 **Phạm vi thí nghiệm:** F0–F5
 
-**Ngày cập nhật:** 19/08/2026
+**Ngày cập nhật:** 22/08/2026
 
 ---
 
@@ -30,9 +30,11 @@ Từ F5, VisDrone AP được tính sau mỗi epoch và được dùng trực ti
 Trong các checkpoint full-training đã đánh giá hợp lệ, F5 tốt nhất với
 VisDrone AP 28,42%, AP50 51,94%, AP75 26,93%, AR@100 35,71% và AR@500 46,17%.
 So với F4, F5 tăng 1,46 điểm AP và 2,60 điểm AR@500. Checkpoint tốt nhất của
-F5 nằm ở epoch 5; không được thay bằng `last.pth` epoch 25. Kết quả official
-của F0 hiện không hợp lệ do notebook đã lấy nhầm checkpoint smoke-test epoch
-1; cần đánh giá lại checkpoint F0 full-training epoch 17.
+F5 nằm ở epoch 5; không được thay bằng `last.pth` epoch 25. Tiled inference
+640/o20 đã được thử nhưng làm AP giảm 0,88 điểm, nên không tiếp tục thành F6
+tiling. Kết quả official của F0 hiện không hợp lệ do notebook đã lấy nhầm
+checkpoint smoke-test epoch 1; cần đánh giá lại checkpoint F0 full-training
+epoch 17.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -440,7 +442,23 @@ epoch 17. Model smoke xuất đúng 500 detection/ảnh và có AP gần 0, phù
 một model chưa train. Không được dùng hàng F0 smoke trong báo cáo kết quả cuối
 cùng hoặc để tính improvement official.
 
-### 7.3. Tài nguyên huấn luyện
+### 7.3. Thí nghiệm tiled inference trên F5 best
+
+F5 `best.pth` epoch 5 được đánh giá hai lần trên cùng 548 ảnh, cùng score
+threshold 0,001 và cùng giới hạn 500 detections/ảnh. Nhánh tiled dùng tile
+640×640, overlap 20%, class-wise NMS IoU 0,50 và `pre_nms_topk=10000`.
+
+| Phương pháp | AP | AP50 | AP75 | AR@1 | AR@10 | AR@100 | AR@500 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| F5 full-image | **28,42** | **51,94** | **26,93** | 0,95 | 6,53 | **35,71** | 46,17 |
+| F5 tiled 640/o20 | 27,54 | 51,22 | 25,70 | **1,01** | **6,56** | 34,64 | **46,94** |
+| Tiled − full, điểm % | **−0,88** | **−0,72** | **−1,23** | +0,05 | +0,03 | **−1,08** | +0,77 |
+
+Tiled inference không đạt tiêu chí đề xuất là tăng ít nhất 1,0 điểm AP hoặc
+1,5 điểm AR@500. Nó tăng nhẹ recall cực đại nhưng làm giảm các metric chất
+lượng chính, đặc biệt AP75 và AR@100.
+
+### 7.4. Tài nguyên huấn luyện
 
 | F | Thời gian epoch tại best checkpoint | Peak VRAM | Batch vật lý |
 |---|---:|---:|---:|
@@ -523,7 +541,26 @@ lợi ích không chỉ đến từ các detection lỏng ở IoU thấp. AR@10 
 `last.pth` epoch 25 có AP thấp hơn `best.pth` 2,26 điểm và AR@500 thấp hơn 4,45
 điểm. Khi inference hoặc báo cáo F5 phải dùng `best.pth` epoch 5.
 
-### 8.6. Cải thiện tích lũy F1 → F5
+### 8.6. Tác động của tiled inference trên F5 best
+
+Full-image sinh 271.457 detections, trung bình 495,36/ảnh; 503/548 ảnh chạm
+giới hạn 500. Tiled inference sinh đúng 274.000 detections; cả 548 ảnh đều
+chạm giới hạn 500. Mean score tăng từ 0,141 lên 0,202 nhưng AP giảm, cho thấy
+việc có thêm detection confidence cao không đồng nghĩa precision tốt hơn sau
+khi ghép các tile.
+
+Phân bố class cũng thay đổi mạnh: số prediction `pedestrian` tăng từ 48.134
+lên 75.358 (+56,6%), trong khi `awning-tricycle` giảm 47,2%, `bus` giảm 38,1%
+và `tricycle` giảm 37,4%. Đây là bằng chứng về thay đổi bias của detector khi
+vật thể được phóng lớn theo tile; chưa có per-class AP nên không thể quy toàn
+bộ chênh lệch cho từng class, nhưng xu hướng phù hợp với việc recall vật nhỏ
+tăng trong khi precision/localization tổng giảm.
+
+Tiling chỉ tăng AR@500 0,77 điểm nhưng giảm AP 0,88, AP75 1,23 và AR@100 1,08
+điểm. Vì AP@[0.50:0.95] là tiêu chí chính, **không nên dùng tiled inference
+640/o20 làm cấu hình cuối và không có đủ bằng chứng để train F6 tiling**.
+
+### 8.7. Cải thiện tích lũy F1 → F5
 
 F5 so với F1 tăng 4,31 điểm AP, 5,40 điểm AP50, 4,64 điểm AP75, 3,83 điểm
 AR@100 và 7,32 điểm AR@500. AP tăng tương đối khoảng 17,9%.
@@ -557,15 +594,13 @@ F5 `best.pth` epoch 5 là model tốt nhất hiện tại. Tuy nhiên:
    `last.pth` epoch 25.
 2. Đánh giá lại đúng `models/checkpoints/f0/results/faster_rcnn_runs/f0/best.pth`
    để hoàn chỉnh ablation table.
-3. **Chưa bắt buộc train F6.** F5 đã vượt mọi ngưỡng chấp nhận và đủ làm kết
-   quả cuối nếu mục tiêu là hoàn thiện báo cáo hiện tại.
-4. Nếu cần tiếp tục tối ưu, chạy một thí nghiệm đánh giá rẻ hơn trước: tiled
-   inference trên F5 `best.pth`, tile 640 px, overlap 20%, ánh xạ box về tọa độ
-   toàn ảnh, class-wise NMS và giữ tối đa 500 box/ảnh. Chỉ đặt tên/train F6 nếu
-   tiled inference tăng ít nhất 1,0 điểm AP hoặc 1,5 điểm AR@500.
-5. Nếu tiled inference có lợi, F6 nên là **F5 + tiled train/inference**; giữ
-   nguyên V2, default anchors, crowded proposals, seed, optimizer và evaluator
-   để chỉ khảo sát một yếu tố là tiling.
+3. **Không train F6 theo hướng tiling 640/o20.** Thí nghiệm trên F5 best làm AP
+   giảm 0,88 điểm và không đạt ngưỡng AR@500 dù chi phí inference cao hơn.
+4. Giữ F5 full-image `best.pth` epoch 5 làm cấu hình cuối. Nếu mục tiêu hiện tại
+   là hoàn thiện báo cáo, dừng chuỗi experiment tại đây.
+5. Nếu vẫn cần một F6 mới, ưu tiên một ablation nhỏ và rẻ hơn tiling: giữ F5
+   nhưng thử early stopping/patience hoặc lịch learning rate sớm hơn. Không gọi
+   đây là cải thiện accuracy cho tới khi VisDrone AP vượt 28,42%.
 6. Thử augmentation nhẹ theo từng bước: horizontal flip; sau đó photometric;
    cuối cùng affine ±5°. Không bật đồng thời tất cả khi chưa đo riêng tác động.
 7. Bổ sung AP/AP50/AP75 theo từng class và phân tích lỗi theo kích thước,
@@ -650,11 +685,12 @@ và small anchors F2 không cải thiện mAP tổng; crowded proposals F3 đem 
 thiện nhỏ nhưng ổn định; Faster R-CNN V2 trong F4 cải thiện localization và
 recall; tăng độ phân giải trong F5 tạo bước tăng lớn nhất trên VisDrone AP.
 
-F5 `best.pth` epoch 5 là cấu hình được khuyến nghị với VisDrone AP 28,42%,
-AP50 51,94%, AP75 26,93%, AR@100 35,71% và AR@500 46,17%. F5 đã đủ làm kết quả
-cuối của pipeline hiện tại; F6 là tùy chọn nghiên cứu thêm, không phải yêu cầu
-bắt buộc. Trước khi tốn chi phí train F6, nên kiểm tra giả thuyết tiling bằng
-tiled inference trên checkpoint F5 hiện có.
+F5 full-image `best.pth` epoch 5 là cấu hình được khuyến nghị với VisDrone AP
+28,42%, AP50 51,94%, AP75 26,93%, AR@100 35,71% và AR@500 46,17%. Tiled
+inference 640/o20 tăng AR@500 lên 46,94% nhưng giảm AP xuống 27,54% và AP75
+xuống 25,70%; do đó không được chọn và không nên tiếp tục thành F6 tiled
+training. Chuỗi thí nghiệm có thể dừng tại F5 full-image sau khi đánh giá lại
+đúng checkpoint F0 để hoàn chỉnh bảng baseline.
 
 ## Tài liệu và mã nguồn liên quan
 
