@@ -1,0 +1,552 @@
+% LaTeX-ready fragment for the shared project report.
+% Required packages: amsmath, booktabs, tabularx, graphicx.
+% Bibliography entries are provided in report_references_cnn.bib.
+% If the main file is not compiled from the repository root, redefine
+% \reportfigdir to the copied figure directory before inputting this fragment.
+\providecommand{\reportfigdir}{docs/figures}
+
+\section{Dataset}
+\label{sec:dataset}
+
+The project uses VisDrone2019-DET, an aerial object detection benchmark
+collected from drone-mounted cameras under different cities, viewpoints,
+altitudes, weather conditions, and scene densities \cite{zhu2018vision,du2019visdrone}.
+The task contains ten foreground categories: pedestrian, people, bicycle, car,
+van, truck, tricycle, awning-tricycle, bus, and motor. In contrast to
+street-level datasets, VisDrone contains many small, densely packed, and
+partially occluded objects. These properties directly influenced the
+preprocessing, detector configuration, and evaluation protocol.
+
+\subsection{Exploratory Data Analysis (EDA)}
+\label{subsec:dataset-insight}
+
+The exploratory analysis was executed reproducibly with random seed 42 in the
+project EDA notebook. Dataset and box statistics include only annotations with
+\texttt{status=keep}, exactly matching objects exported for training; rejected
+rows are audited separately. Image-quality results use a fixed sample of 250
+images per split and are interpreted as diagnostics rather than full-population
+estimates.
+
+After ignored and invalid annotations were removed, the data used in this
+project contained 8,629 images and 457,065 valid objects. Table
+\ref{tab:split-statistics} summarizes the three processed splits.
+
+\begin{table}[htbp]
+  \centering
+  \caption{VisDrone split statistics after preprocessing.}
+  \label{tab:split-statistics}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    Split & Images & Raw rows & Retained boxes & Mean/image & Median/image & Maximum/image \\
+    \midrule
+    Train      & 6,471 & 353,550 & 343,204 & 53.04 & 42 & 902 \\
+    Validation &   548 &  40,169 &  38,759 & 70.73 & 65 & 317 \\
+    Test-dev   & 1,610 &  77,547 &  75,102 & 46.65 & 36 & 461 \\
+    \midrule
+    Total      & 8,629 & 471,266 & 457,065 & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+The integrity audit found no missing image--annotation pair, unreadable image,
+or malformed annotation row. Of 471,266 raw rows, 457,065 (96.99\%) are valid
+training objects, 14,200 are ignored regions with \texttt{score=0}, and one
+training box has non-positive size. No image becomes empty after filtering.
+Thus, the labeled data pass the basic integrity checks, while ignored regions
+must remain separate from ordinary negative background. No retained box
+required boundary clipping under the current validation rules.
+
+\paragraph{Class Distribution.}
+Table \ref{tab:class-distribution} reports retained instances across all three
+labeled splits. Cars and pedestrians constitute 64.80\% of all objects, while
+awning-tricycles constitute 0.96\%. In training, the maximum-to-minimum
+instance ratio is 44.6:1. The instance-level loss therefore receives many more
+updates from common classes. Although mAP weights categories equally, it still
+hides which rare classes fail; per-class AP and a confusion matrix are needed.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Class distribution across the labeled VisDrone splits.}
+  \label{tab:class-distribution}
+  \begin{tabular}{lrr@{\hspace{1.2cm}}lrr}
+    \toprule
+    Class & Instances & Share & Class & Instances & Share \\
+    \midrule
+    Car        & 187,004 & 40.91\% & Truck            & 16,284 & 3.56\% \\
+    Pedestrian & 109,187 & 23.89\% & Bicycle          & 13,069 & 2.86\% \\
+    Motor      &  40,378 &  8.83\% & Bus              &  9,117 & 1.99\% \\
+    People     &  38,560 &  8.44\% & Tricycle         &  6,387 & 1.40\% \\
+    Van        &  32,702 &  7.15\% & Awning-tricycle  &  4,377 & 0.96\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Object Size Distribution.}
+Following the COCO area convention, 60.47\% of training boxes and 68.56\% of
+validation boxes are small ($\text{area}<32^2$ pixels). Table
+\ref{tab:box-scale} shows that the median training object is only 25 by 27
+pixels and occupies approximately 0.046\% of the image. A localization error
+of only a few pixels can therefore substantially decrease IoU.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Bounding-box scale statistics using the COCO area convention.}
+  \label{tab:box-scale}
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    Split & Med. width & Med. height & Med. area & Small & Medium & Large \\
+    \midrule
+    Train      & 25 px & 27 px & 680 px$^2$ & 60.47\% & 34.00\% & 5.53\% \\
+    Validation & 20 px & 25 px & 520 px$^2$ & 68.56\% & 28.68\% & 2.76\% \\
+    Test-dev   & 20 px & 23 px & 480 px$^2$ & 67.66\% & 29.13\% & 3.21\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Across all 457,065 retained boxes, the median geometry is 24$\times$26 pixels
+with median area 627 pixels$^2$. A total of 38.91\% have at least one side
+below 16 pixels, 72.13\% have a side below 32 pixels, and 69.19\% occupy less
+than 0.1\% of their image. This relative-area diagnostic is distinct from the
+COCO categories. Tiny objects affect every class: 92.44\% of people, 88.88\%
+of pedestrians, 83.96\% of motors, and 81.38\% of bicycles occupy less than
+0.1\% of the image. Even bus and truck contain 30.89\% and 38.12\% tiny boxes.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/dataset_statistics.pdf}
+  \caption{Class imbalance and COCO-scale distribution. Cars dominate the
+  retained labels, while small boxes account for more than 60\% of every split.}
+  \label{fig:dataset-statistics}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/class_difficulty.pdf}
+  \caption{Per-class scale and visibility difficulty. ``Tiny'' denotes a box
+  whose area is below 0.1\% of its image and is an EDA diagnostic rather than
+  a COCO evaluation category.}
+  \label{fig:class-difficulty}
+\end{figure}
+
+\paragraph{Image properties and split shift.}
+Images have variable resolutions, including 1,400$\times$1,050,
+1,400$\times$788, 2,000$\times$1,500, 1,360$\times$765,
+1,916$\times$1,078, and 1,920$\times$1,080. Training width ranges from 480 to
+2,000 pixels and its mean resolution is approximately 1,520$\times$1,002.
+Validation is smaller on average (1,291$\times$726) and almost entirely has
+aspect ratio 1.78, whereas training mixes ratios near 1.33 and 1.78. Resizing
+to fixed independent width and height would therefore introduce geometric
+distortion and potentially a split-dependent artifact.
+
+Class composition also changes. Relative to training, validation contains 5.34
+percentage points more people and 3.97 more motors, but 5.92 fewer cars.
+Class-distribution Jensen--Shannon divergence is 0.0164 for train--validation
+and 0.0084 for train--test-dev. The larger shift lies in density:
+Kolmogorov--Smirnov distance is 0.253 for train--validation and 0.347 for
+validation--test-dev.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/eda_diagnostics.pdf}
+  \caption{Key diagnostics from the EDA notebook: image density, tiny-object
+  indicators, class-composition shift, and simulated object scale after
+  letterboxing.}
+  \label{fig:eda-diagnostics}
+\end{figure}
+
+\paragraph{Objects per Image and Object Density.}
+Validation contains 70.73 retained objects per image on average, compared with
+53.04 in training and 46.65 in test-dev. Furthermore, 19.53\% of validation
+images and 10.86\% of training images contain more than 100 objects; 22 images
+across the labeled data contain more than 300. Proposal and output limits that
+are suitable for a general-purpose dataset can therefore cap recall.
+
+Across all valid boxes, approximately 49.5\% are unoccluded, 40.9\% are
+partially occluded, 9.6\% are heavily occluded, and 4.0\% are truncated.
+Motor has the highest heavy-occlusion rate (15.92\%); bicycle, tricycle, and
+awning-tricycle are near 13\%. More than 71\% of people and bicycle instances
+are occluded to some degree. Bus has the highest truncation rate (9.63\%),
+followed by truck (7.61\%). These labels should be retained for training and
+used for stratified error analysis.
+
+\paragraph{Bounding-box Characteristics.}
+Across all 457,065 retained boxes, median width is 24 pixels, median height is
+26 pixels, and median area is 627 pixels$^2$. The 10th--90th percentile ranges
+are 7--81 pixels for width, 10--72 pixels for height, and 90--5,200 pixels$^2$
+for area. Aspect ratio, defined as width divided by height, has median 0.89 and
+spans 0.41--2.08 between the 10th and 90th percentiles. The task therefore
+contains portrait-like pedestrians, near-square vehicles, and wide objects in
+addition to substantial scale variation.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/density_bbox_geometry.pdf}
+  \caption{Object density and bounding-box geometry. The panels show complete
+  objects-per-image distributions, log-scale area distributions with COCO
+  thresholds, and width/height aspect ratios.}
+  \label{fig:density-bbox-geometry}
+\end{figure}
+
+\paragraph{Qualitative Analysis.}
+A fixed six-image audit gallery complements the aggregate statistics. It
+contains tiny distant targets, exceptionally crowded traffic, severe
+occlusion, low and high illumination, and a visibly different object
+scale/viewpoint. Red rectangles denote retained ground-truth boxes. The same
+gallery should later be used to compare predictions from every model family,
+including representative failures rather than only successful examples.
+VisDrone does not provide per-image altitude metadata, so the final panel shows
+apparent scale/viewpoint variation rather than verified flight altitude.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/qualitative_eda_gallery.pdf}
+  \caption{Six representative VisDrone conditions for qualitative audit:
+  tiny objects, crowded traffic, heavy occlusion, illumination variation, and
+  scale/viewpoint variation. This is a dataset audit, not a prediction result.}
+  \label{fig:qualitative-eda-gallery}
+\end{figure}
+
+\paragraph{Spatial context and co-occurrence.}
+Median normalized horizontal box centers lie between 0.488 and 0.504 for all
+classes, indicating no strong left--right bias. Vertical position is
+class-dependent: large vehicles are higher in the image (median normalized
+$y\approx0.34$--0.35), while people and two-wheel vehicles are lower
+($y\approx0.40$--0.46). Bus and truck have the highest boundary-contact rates,
+7.01\% and 5.99\%. This drone-perspective structure supports mild bbox-safe
+translation but argues against extreme crops or rotations.
+
+The strongest image-level co-occurrences are car--van (Jaccard 0.790),
+pedestrian--car (0.771), and people--motor (0.718). Context can help recognition
+but may create shortcuts. Oversampling a complete image for a rare category can
+also oversample common co-occurring classes, so targeted instance copy-paste is
+more controllable when placement remains plausible.
+
+\paragraph{Duplicate, leakage, and image-quality audit.}
+SHA-256 found three byte-identical groups within individual splits: two in
+training and one in validation. Their annotations differ and require manual
+inspection. No exact duplicate crosses a split. However, 24 filename sequence
+prefixes occur in both training and validation, and three same-sequence pairs
+have perceptual dHash distance at most six. This does not prove direct leakage,
+but it indicates temporal or scene correlation. The official split remains
+necessary for benchmark comparison; a sequence-aware evaluation is preferable
+when measuring generalization to unseen scenes.
+
+On a fixed sample of 250 images per split, validation is brighter on average
+(0.4518 on a normalized 0--1 scale) than training (0.3693) and test-dev
+(0.3447). Mean contrast is similar and validation sharpness is slightly lower.
+Because this is a sampled diagnostic, it supports mild brightness, contrast,
+color, and blur augmentation but not aggressive global correction.
+
+\paragraph{Task-level implications from EDA.}
+The notebook translated these findings into controlled simulations:
+The square-letterbox simulation estimates scale sensitivity across model
+families. It is a dataset diagnostic rather than the exact runtime preprocessing
+of any one detector.
+\begin{itemize}
+  \item With square letterboxing, 46.63\%, 27.63\%, and 16.65\% of boxes have
+  short side below 8 pixels at inputs 640, 960, and 1,280 respectively.
+  Resolution must therefore be tested as an accuracy--memory ablation.
+  \item At simulated input 960, large default anchor shapes cover substantially
+  fewer ground-truth shapes than an 8--128-pixel set at shape-IoU $\geq0.5$.
+  This indicates that all model families must preserve fine-scale features or
+  adapt their assignment mechanism to tiny targets; the implementation remains
+  architecture-specific.
+  \item A 640-pixel tile with 20\% overlap geometrically contains 99.81\% of
+  boxes in at least one tile but costs approximately 6.59 tile inferences per
+  image. Tiling is therefore a general accuracy--latency hypothesis that must
+  be validated separately for each detector.
+  \item Repeat-Factor Sampling with threshold 0.1 assigns every class a factor
+  of 1.0 because even awning-tricycle occurs in 17.79\% of training images.
+  Complete-image oversampling therefore does not solve instance imbalance.
+\end{itemize}
+
+These simulations provide hypotheses, while trained ablations determine the
+final configuration. Overall, the EDA identifies tiny objects, crowded scenes,
+class imbalance, occlusion, split shift, and sequence correlation as the main
+data risks. It supports aspect-ratio-preserving resizing, high-resolution
+experiments, increased proposal/detection limits, per-class and scale-aware
+metrics, and a fixed qualitative audit set containing crowded, tiny, blurred,
+and rare-class examples.
+
+\subsection{Preprocess}
+\label{subsec:preprocess}
+
+Preprocessing was performed once before the processed dataset was uploaded to
+Kaggle. The same image splits, class mapping, and COCO ground truth are shared
+by the CNN-, YOLO-, and Transformer-based experiments, preventing data
+conversion differences from confounding their comparison. Each raw
+annotation follows
+
+\begin{center}
+\texttt{x, y, width, height, score, category, truncation, occlusion}.
+\end{center}
+
+The pipeline matched images and annotations by filename, verified image
+readability, removed rows with \texttt{score <= 0}, and retained only category
+IDs 1--10. Category 0 denotes ignored regions, while category 11 denotes
+``others''; neither was used as a positive training label. Non-positive and
+fully out-of-image boxes were discarded. Boundary-crossing boxes were clipped
+to the image, after which boxes smaller than 1$\times$1 pixel were removed.
+Valid labels were exported as COCO JSON with pixel-space \texttt{xywh} boxes,
+area, category ID, and \texttt{iscrowd=0}. YOLO labels were exported in parallel
+for the other model family in the project.
+
+Preprocessing removed 10,345 ignored training rows and one non-positive box,
+1,410 ignored validation rows, and 2,445 ignored test-dev rows. No missing
+image, missing annotation, unreadable image, or malformed annotation was found.
+Images were hard-linked into the processed tree, with copying as a fallback.
+No offline resizing, normalization, or augmentation was performed. Original
+pixels are therefore shared across architectures. Input sizing, normalization,
+tensor layout, and label conversion are applied at runtime by each model family
+and are documented in its experiment setup. Ignored regions are excluded from the processed
+training and validation COCO files but retained in the raw annotations. The
+unified comparison uses the processed ground truth only. A separate
+official-compatible VisDrone evaluation may use the raw annotations to suppress
+detections whose area overlaps an ignored region by at least 50\%, as specified
+by the VisDrone toolkit \cite{visdrone_toolkit}; those values are not mixed with
+the unified results.
+
+\subsection{Dataset Augmentation}
+\label{subsec:augmentation}
+
+The EDA defines common augmentation requirements for the complete detection
+task, independent of downstream architecture. Augmentation is applied online
+and only to training samples, so original images remain unchanged and no
+augmented copies are stored. Validation and test images are not stochastically
+transformed, ensuring that all model families are compared on a fixed
+distribution.
+
+Any geometric operation must transform the image and its bounding boxes with
+the same mapping, clip boxes to the image boundary, and remove invalid remnants
+without desynchronizing their class labels. Since many VisDrone targets are
+only a few pixels wide, aggressive cropping, blur, rotation, or downscaling can
+erase the target rather than create useful invariance. The EDA therefore
+supports horizontal flipping, mild affine and photometric perturbations, and
+carefully bounded blur as candidate operations. Exact probabilities and
+implementations are controlled within each model experiment. Exact policies
+and ablation results belong in the corresponding experiment sections.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{CNN-based model}
+\label{subsec:cnn-model}
+
+\subsubsection{Model Overview}
+\label{subsubsec:cnn-overview}
+
+The CNN detector is Faster R-CNN \cite{ren2015faster} with a ResNet-50 backbone
+\cite{he2016resnet} and an FPN \cite{lin2017fpn}. Its two-stage design first
+generates class-agnostic candidates and then performs proposal-level
+classification and localization. This is suitable for small and overlapping
+objects because proposal quality can be improved separately from the final
+detection head.
+
+ResNet-50 extracts hierarchical convolutional features. FPN combines
+semantically strong low-resolution maps with spatially detailed high-resolution
+maps. The RPN predicts objectness and candidate boxes at every pyramid level;
+RoI Align then creates fixed-size proposal features for the classification and
+box-regression heads. The classifier predicts background or one of ten
+VisDrone classes.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/faster_rcnn_architecture.pdf}
+  \caption{Faster R-CNN ResNet-50-FPN architecture used by the CNN experiments.
+  The RPN and detection head share the multi-scale features produced by the
+  backbone and FPN.}
+  \label{fig:faster-rcnn-architecture}
+\end{figure}
+
+All runs use Torchvision implementations and COCO pretrained weights
+\cite{torchvision_fasterrcnn}. The COCO predictor is replaced by a
+\texttt{FastRCNNPredictor} with 11 outputs. F0--F3 use
+\texttt{fasterrcnn\_resnet50\_fpn}; F4--F5 use
+\texttt{fasterrcnn\_resnet50\_fpn\_v2}. Each experiment starts independently
+from COCO weights. The total training loss is
+
+\begin{equation}
+L=L_{\mathrm{cls}}+L_{\mathrm{box}}+
+L_{\mathrm{rpn\_objectness}}+L_{\mathrm{rpn\_box}}.
+\end{equation}
+
+\subsubsection{Set up}
+\label{subsubsec:cnn-setup}
+
+Training was performed in Kaggle on an NVIDIA Tesla T4 using CUDA automatic
+mixed precision. In the CNN pipeline, the loader converts COCO boxes from
+\texttt{xywh} to \texttt{xyxy} and RGB pixels to \texttt{float32} tensors in
+$[0,1]$. The Faster R-CNN transform preserves aspect ratio and applies ImageNet
+normalization with $\boldsymbol{\mu}=(0.485,0.456,0.406)$ and
+$\boldsymbol{\sigma}=(0.229,0.224,0.225)$. F0--F4 resize the shorter side to
+800 pixels and cap the longer side at 1,333 pixels; F5 uses 896 and 1,493.
+All full runs used 25 epochs, SGD with learning rate 0.0025,
+momentum 0.9, weight decay 0.0005, seed 42, two data-loader workers, and
+validation batch size one. MultiStepLR reduced the learning rate by 0.1 at
+epochs 15 and 20: 0.0025 for epochs 1--14, 0.00025 for epochs 15--19, and
+0.000025 for epochs 20--25. Physical batch size and gradient accumulation were
+adjusted for memory, but the effective batch remained two images.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Controlled CNN ablation sequence.}
+  \label{tab:cnn-ablation}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lllllll}
+    \toprule
+    Run & Detector & Main intervention & Aug. & Resize & Batch/accum. & Best metric \\
+    \midrule
+    F0 & V1 & baseline, default anchors/proposals & No  & 800/1,333 & 2/1 & COCO mAP \\
+    F1 & V1 & F0 + bbox-safe augmentation        & Yes & 800/1,333 & 2/1 & COCO mAP \\
+    F2 & V1 & anchors 8, 16, 32, 64, 128 px     & No  & 800/1,333 & 2/1 & COCO mAP \\
+    F3 & V1 & increased crowded-scene proposals  & No  & 800/1,333 & 2/1 & COCO mAP \\
+    F4 & V2 & F3 + improved V2 detector           & No  & 800/1,333 & 1/2 & COCO mAP \\
+    F5 & V2 & F4 + increased input resolution     & No  & 896/1,493 & 1/2 & VisDrone AP \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+F1 evaluated a CNN-specific online, bounding-box-safe augmentation policy.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Online augmentation policy evaluated only in CNN experiment F1.}
+  \label{tab:augmentation}
+  \begin{tabular}{lcl}
+    \toprule
+    Transformation & Probability & Parameters \\
+    \midrule
+    Horizontal flip       & 0.50 & left--right \\
+    Vertical flip         & 0.20 & top--bottom \\
+    Affine transform      & 0.60 & rotation $\pm10^{\circ}$, translation $\pm5\%$, scale 0.90--1.10 \\
+    Brightness/contrast   & 0.80 & factors in 0.85--1.15 \\
+    Gaussian blur         & 0.10 & radius 0.10--1.00 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The training script attaches \texttt{ControlledDetectionAugmenter} only for
+\texttt{EXPERIMENT=F1}; F0 and F2--F5 use \texttt{augmentation=None}. Images
+and box corners are transformed together, affine padding uses RGB
+$(114,114,114)$, and boxes are clipped afterward. A box and its synchronized
+class label are removed when a coordinate is non-finite, width or height is
+below 2 pixels, or retained area is below 30\% of expected post-scale area.
+Seed 42 and deterministic worker seeding make the stochastic pipeline
+reproducible. F1 otherwise keeps the split, initialization, optimizer,
+schedule, effective batch size, resizing, anchors, and proposal limits
+identical to F0, and starts independently from the same COCO weights.
+
+Under the unified evaluator, F1 raises AP50 by 1.28 points and AP-small by 0.18
+but reduces overall AP by 0.24, AP75 by 0.51, AR@100 by 0.74, and AR@500 by
+0.74. The policy was not retained in F2--F5. This is a CNN ablation result, not
+a general conclusion that augmentation is harmful to other model families.
+
+F2 used anchor sizes 8, 16, 32, 64, and 128 pixels with aspect ratios 0.5,
+1.0, and 2.0 on every FPN level. Relative to F0, it improved AP by 0.54 points,
+AP50 by 2.91, AP-small by 1.92, AR-small by 4.88, and AR@500 by 2.65, while
+AP75 fell by 0.48. The default anchors were restored for the subsequent
+proposal ablation because small anchors improved retrieval more than high-IoU
+localization. F3 instead increased RPN pre/post-NMS top-N limits to
+4,000/2,000 during training and 2,000/1,000 during inference. Relative to F0,
+this improved AP by 1.25, AP75 by 0.98, AR@100 by 2.55, and AR@500 by 2.62
+points, so the proposal change was retained.
+
+F4 adopted Faster R-CNN V2. Relative to F3 under the common COCO-style
+evaluator, it improved AP by 0.67 points, AP75 by 1.48, AR@100 by 1.26,
+AR@500 by 1.22, AP-small by 1.53, and AR-small by 2.22 points, despite a 0.55
+point reduction in AP50. F5 then increased input size to 896/1,493.
+The attempted 1,024/1,707 setting exceeded Tesla T4 memory. F5 also evaluated
+up to 500 detections per image at score threshold 0.001 and selected
+\texttt{best.pth} directly by VisDrone AP.
+
+\paragraph{CNN results.}
+The saved best checkpoints from all six full runs were re-evaluated on the
+same 548 processed validation images with \texttt{pycocotools}. The protocol
+uses bounding-box IoU thresholds 0.50:0.05:0.95, 101 recall thresholds, and
+\texttt{maxDets=[1,10,100,500]}. AP, AP50, AP75, and every scale-specific
+AP/AR value use 500 detections per image; AR@K uses the stated K. COCO area
+ranges define small objects below $32^2$ pixels, medium objects from $32^2$ to
+$96^2$, and large objects at least $96^2$ pixels. Predictions are retained at
+score 0.001 and capped at 500 per image.
+
+This is a COCO-style extension to maxDet=500, not the official COCO maxDet=100
+summary or the official VisDrone ignored-region evaluator. The processed
+ground truth excludes ignored rows, so these results support controlled project
+comparisons and must not be mixed directly with official-compatible VisDrone
+scores.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Unified COCO-style validation results at maxDet=500: overall precision and recall (\%).}
+  \label{tab:cnn-results}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lrrrrrrr}
+    \toprule
+    Run & AP (50:95) & AP50 & AP75 & AR@1 & AR@10 & AR@100 & AR@500 \\
+    \midrule
+    F0 & 23.972 & 42.603 & 23.507 & 10.490 & 30.821 & 40.604 & 40.618 \\
+    F1 & 23.733 & 43.881 & 22.998 & 10.403 & 30.306 & 39.861 & 39.879 \\
+    F2 & 24.508 & 45.513 & 23.028 & 10.424 & 30.931 & 43.029 & 43.272 \\
+    F3 & 25.223 & 45.201 & 24.482 & 10.787 & 31.618 & 43.150 & 43.237 \\
+    F4 & 25.893 & 44.652 & 25.958 & 10.878 & 32.831 & 44.407 & 44.459 \\
+    \textbf{F5} & \textbf{27.121} & \textbf{47.308} & \textbf{26.806} & \textbf{11.300} & \textbf{34.411} & \textbf{47.024} & \textbf{47.114} \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Unified COCO-style validation results at maxDet=500 by object area (\%).}
+  \label{tab:cnn-scale-results}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    Run & AP small & AR small & AP medium & AR medium & AP large & AR large \\
+    \midrule
+    F0 & 15.280 & 31.655 & 34.305 & 52.893 & 42.682 & 58.579 \\
+    F1 & 15.455 & 30.996 & 33.504 & 52.907 & 44.308 & 61.690 \\
+    F2 & 17.199 & 36.539 & 33.156 & 51.572 & 42.101 & 57.282 \\
+    F3 & 16.871 & 35.238 & 35.192 & 53.994 & 43.417 & 57.516 \\
+    F4 & 18.397 & 37.453 & 35.577 & 53.527 & 43.221 & 55.767 \\
+    \textbf{F5} & \textbf{18.954} & \textbf{40.025} & \textbf{37.783} & \textbf{56.683} & \textbf{48.531} & \textbf{65.439} \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{\reportfigdir/cnn_experiment_progression.pdf}
+  \caption{Unified COCO-style precision and recall at maxDet=500. F1 shows
+  that augmentation alone did not improve overall AP, while F2--F5 improve
+  the baseline and F5 achieves the best value for every reported metric.}
+  \label{fig:cnn-progression}
+\end{figure}
+
+F5 is the final CNN model. Compared with F4, it gains 1.228 points AP, 2.656
+AP50, 0.848 AP75, 2.617 AR@100, and 2.655 AR@500. It also gains 0.557
+AP-small, 2.206 AP-medium, and 5.310 AP-large. This AP gain is 4.74\% in
+relative terms. Compared with F0, F5 gains 3.149 AP points (13.14\% relative),
+4.705 AP50, 3.299 AP75, 6.496 AR@500, and 3.674 AP-small. Training required
+9.36 hours and peaked at 11.28 GB GPU memory. Its best checkpoint under the
+training-time VisDrone criterion occurred at epoch 5: although training loss
+fell from 1.1165 to 0.4009, that validation AP declined to 26.15\% by epoch 25.
+Final inference must therefore use \texttt{f5/best.pth}, not
+\texttt{last.pth}.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{\reportfigdir/f5_training_dynamics.pdf}
+  \caption{F5 training dynamics. Training loss decreases throughout the run,
+  whereas validation AP reaches its maximum at epoch 5 and subsequently
+  fluctuates. This supports validation-based checkpoint selection.}
+  \label{fig:f5-training-dynamics}
+\end{figure}
+
+A major remaining limitation is small-object detection: F5 AP-small is
+18.954\%, versus 37.783\% AP-medium and 48.531\% AP-large. Under the separate
+official-compatible VisDrone protocol, a 640$\times$640 tiled-inference
+experiment increased AR@500 by 0.77 points but reduced AP by 0.88 and AP75 by
+1.23 points. It was rejected as the default method. Other limitations include
+crowded scenes and class imbalance; future work should test conservative small-object-aware
+augmentation, class-aware optimization, and multiple random seeds.
