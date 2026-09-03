@@ -14,7 +14,7 @@ model families, evaluation on `test-dev`, and a Streamlit application for testin
 - Experiment with Faster R-CNN, YOLO11, DETR, and RT-DETR.
 - Support sliced/tiled inference with SAHI or GOIS for small objects.
 - Evaluate with COCOeval and a Python port of the official VisDrone toolkit.
-- Run image inference in a Streamlit demo using `models/yolo/best.pt`.
+- Run YOLO11m + SAHI sliced inference in a Streamlit demo using `models/yolo/best.pt`.
 
 ## Processing Pipeline
 
@@ -317,7 +317,7 @@ Data notebooks:
 - `nb/YOLO11/visdrone-yolo11m.ipynb`: evaluates the base YOLO11m model, fine-tunes it for 50 epochs at
   `imgsz=1280`, and evaluates the best checkpoint with `max_det=500`.
 - `nb/YOLO11/visdrone-yolo11m-sahi.ipynb`: slices train/val images into `640x640` tiles with `20%`
-  overlap, trains on the tiles, and evaluates with SAHI on the original images.
+  overlap, trains YOLO11m for 15 epochs on the tiles, and evaluates with SAHI on the original images.
 - `nb/YOLO11/visdrone-coco-evaluation.ipynb`: exports predictions, builds COCO ground truth, and computes
   overall and per-class metrics on `test-dev`.
 - `nb/YOLO11/yolo11s-yolo11m-onl-wheels.ipynb`: prepares weights and wheels for an offline Kaggle
@@ -361,7 +361,7 @@ notebooks or check out the corresponding branch.
 
 ## Running the Web Application
 
-The application uses a YOLO checkpoint at the following fixed path:
+The application uses the fine-tuned YOLO11m SAHI checkpoint at the following fixed path:
 
 ```text
 models/yolo/best.pt
@@ -376,13 +376,15 @@ python -m streamlit run web/app.py
 Open `http://localhost:8501`. The interface allows you to:
 
 - Upload a JPG/JPEG/PNG/WEBP image or use the sample image.
-- Adjust the confidence threshold, maximum number of bounding boxes, and NMS IoU.
+- Run overlapping `640x640` SAHI tiles with `20%` overlap plus SAHI's standard full-frame prediction.
+- Adjust the confidence threshold, maximum number of bounding boxes, and merge NMS IoU.
 - View object counts by class, inference time, and the rendered prediction image.
 - Download the result as a PNG file.
 
-By default, the web application uses a confidence threshold of `0.04`, `max_det=300`, and NMS IoU of
-`0.30`. The current local checkpoint has 10 classes, an input size of `1280`, and a size of approximately
-38.7 MB. The device is selected in the following order: CUDA, Apple MPS, then CPU.
+By default, the web application uses a confidence threshold of `0.04`, a final detection cap of `500`,
+and class-aware SAHI NMS with an IoU threshold of `0.50`. The current local checkpoint has 10 classes,
+uses `640x640` training/inference tiles, and is approximately 38.7 MB. The device is selected in the
+following order: CUDA, Apple MPS, then CPU.
 
 ## Testing
 
@@ -396,7 +398,7 @@ The tests cover bounding-box filtering/clipping, YOLO and COCO conversion, split
 metadata, detection rendering, class summaries, and NMS. The latest test result on Python 3.11 is:
 
 ```text
-9 passed
+11 passed
 ```
 
 On a fresh clone without a checkpoint, run only the data pipeline tests:

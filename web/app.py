@@ -1,4 +1,4 @@
-"""Streamlit demo for the local Ultralytics YOLO model."""
+"""Streamlit demo for the local YOLO11m + SAHI inference pipeline."""
 
 from __future__ import annotations
 
@@ -16,13 +16,14 @@ PROJECT_ROOT = WEB_DIR.parent
 MODEL_PATH = PROJECT_ROOT / "models" / "yolo" / "best.pt"
 SAMPLE_IMAGE = WEB_DIR / "assets" / "visdrone_sample.png"
 DEFAULT_CONFIDENCE = 0.04
-DEFAULT_MAX_DETECTIONS = 300
-DEFAULT_NMS_IOU = 0.30
+DEFAULT_MAX_DETECTIONS = 500
+DEFAULT_NMS_IOU = 0.50
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from web.inference import (  # noqa: E402
+    DEFAULT_SLICE_OVERLAP,
     detection_color,
     load_model,
     model_metadata,
@@ -96,7 +97,7 @@ def render_hero(metadata: dict) -> None:
                 <p class="eyebrow">VISDRONE YOLO</p>
                 <h1>Nhìn thành phố<br><span>qua từng vật thể.</span></h1>
                 <p class="hero-subcopy">
-                    Tải ảnh lên, chạy checkpoint YOLO local và kiểm tra từng dự đoán ngay trên trình duyệt.
+                    Tải ảnh lên, chạy YOLO11m với SAHI slicing và kiểm tra từng dự đoán ngay trên trình duyệt.
                 </p>
                 <div class="hero-actions">
                     <a class="primary-link" href="#demo">Thử mô hình</a>
@@ -110,7 +111,7 @@ def render_hero(metadata: dict) -> None:
             f"""
             <div class="stat-rail">
                 <div><strong>{metadata['classes']}</strong><span>Lớp vật thể</span></div>
-                <div><strong>{metadata['image_size']}</strong><span>Input size</span></div>
+                <div><strong>{metadata['image_size']}</strong><span>SAHI tile</span></div>
                 <div><strong>{metadata['weights_mb']:.0f} MB</strong><span>Local weights</span></div>
             </div>
             """,
@@ -171,13 +172,13 @@ def render_detection_summary(prediction) -> None:
         )
 
 
-def render_demo() -> None:
+def render_demo(tile_size: int) -> None:
     st.markdown('<span id="demo"></span>', unsafe_allow_html=True)
     st.markdown(
-        """
+        f"""
         <section class="section-heading">
             <h2>Chạy nhận diện trên ảnh của bạn</h2>
-            <p>YOLO xử lý toàn bộ ảnh bằng checkpoint local. Điều chỉnh ba tham số trước khi chạy.</p>
+            <p>SAHI chia ảnh thành các tile {tile_size} px chồng lấp 20%, chạy YOLO11m và hợp nhất kết quả. Điều chỉnh ba tham số trước khi chạy.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -223,7 +224,7 @@ def render_demo() -> None:
                 max_value=1000,
                 value=DEFAULT_MAX_DETECTIONS,
                 step=1,
-                help="Giới hạn số bbox YOLO trả về sau NMS.",
+                help="Giới hạn số bbox cuối cùng sau khi SAHI hợp nhất dự đoán từ các tile.",
             )
         with nms_column:
             nms_iou_threshold = st.slider(
@@ -233,12 +234,13 @@ def render_demo() -> None:
                 value=DEFAULT_NMS_IOU,
                 step=0.05,
                 format="%.2f",
-                help="IoU dùng bởi NMS tích hợp của YOLO để loại bbox trùng.",
+                help="IoU dùng bởi SAHI NMS để hợp nhất bbox trùng giữa các tile.",
             )
 
         st.caption(
             f"Đang chọn: confidence {confidence_threshold:.2f} · tối đa "
-            f"{max_detections} bbox · NMS IoU {nms_iou_threshold:.2f}."
+            f"{max_detections} bbox · SAHI overlap {DEFAULT_SLICE_OVERLAP:.0%} · "
+            f"merge NMS IoU {nms_iou_threshold:.2f}."
         )
         run_inference = st.button(
             "Chạy nhận diện",
@@ -256,13 +258,14 @@ def render_demo() -> None:
         return
 
     try:
-        with st.spinner("Đang chạy YOLO trên toàn bộ ảnh..."):
+        with st.spinner("Đang chia tile và chạy YOLO11m + SAHI..."):
             prediction = predict(
                 selected_image,
                 get_model(str(MODEL_PATH)),
                 threshold=confidence_threshold,
                 max_detections=max_detections,
                 nms_iou_threshold=nms_iou_threshold,
+                slice_overlap=DEFAULT_SLICE_OVERLAP,
             )
     except Exception as error:
         st.error(f"Không thể chạy mô hình: {error}")
@@ -270,21 +273,23 @@ def render_demo() -> None:
 
     render_detection_summary(prediction)
     st.caption(
-        f"Toàn bộ ảnh (1 lần suy luận) · confidence {confidence_threshold:.2f} · "
-        f"NMS IoU {nms_iou_threshold:.2f} · {len(prediction.detections)} bbox."
+        f"SAHI: {prediction.slice_count} tile {tile_size} px + 1 lượt toàn ảnh · overlap "
+        f"{DEFAULT_SLICE_OVERLAP:.0%} · confidence {confidence_threshold:.2f} · "
+        f"merge NMS IoU {nms_iou_threshold:.2f} · hiển thị "
+        f"{len(prediction.detections)}/{prediction.merged_count} bbox sau hợp nhất."
     )
     original_column, result_column = st.columns(2, gap="medium")
     with original_column:
         st.markdown("#### Ảnh gốc")
         st.image(selected_image, width="stretch")
     with result_column:
-        st.markdown("#### Kết quả · Toàn bộ ảnh")
+        st.markdown("#### Kết quả · YOLO11m + SAHI")
         st.image(prediction.image, width="stretch")
 
     st.download_button(
         "Tải ảnh kết quả",
         data=image_to_png_bytes(prediction.image),
-        file_name=f"{source_name}-yolo-full.png",
+        file_name=f"{source_name}-yolo-sahi.png",
         mime="image/png",
         width="stretch",
     )
@@ -298,7 +303,7 @@ def render_footer(metadata: dict) -> None:
         <footer class="site-footer">
             <div>
                 <strong>YOLO Vision Lab</strong>
-                <span>Streamlit demo dùng checkpoint local.</span>
+                <span>Streamlit demo dùng YOLO11m + SAHI local.</span>
             </div>
             <div>{html.escape(metadata['architecture'])} / {html.escape(metadata['backbone'])}</div>
         </footer>
@@ -320,7 +325,7 @@ def main() -> None:
     render_topbar(model_ready)
     render_hero(metadata)
     render_class_strip(metadata["labels"])
-    render_demo()
+    render_demo(metadata["image_size"])
     render_footer(metadata)
 
 

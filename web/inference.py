@@ -1,4 +1,4 @@
-"""Local Ultralytics YOLO loading, full-image inference, and box rendering."""
+"""Local YOLO11m loading, SAHI sliced inference, and box rendering."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from typing import Any
 
 import torch
 from PIL import Image, ImageDraw, ImageFont
-from torchvision.ops import nms
+from sahi import AutoDetectionModel
+from sahi.predict import get_sliced_prediction
+from sahi.slicing import get_slice_bboxes
+from torchvision.ops import batched_nms
 from ultralytics import YOLO
 
 
@@ -17,6 +20,8 @@ CLASS_COLORS = (
     "#22D3EE", "#A3E635", "#3B82F6", "#FACC15", "#8B5CF6",
     "#F43F5E", "#10B981", "#F97316", "#D946EF", "#FB7185",
 )
+DEFAULT_SLICE_OVERLAP = 0.20
+INCLUDE_STANDARD_PREDICTION = True
 
 
 def detection_color(label_id: int) -> str:
@@ -26,9 +31,9 @@ def detection_color(label_id: int) -> str:
 
 @dataclass(frozen=True)
 class ModelBundle:
-    """Objects required for local YOLO inference."""
-    model: YOLO
-    device: str | int
+    """Objects required for local YOLO + SAHI inference."""
+    model: Any
+    device: str
     id2label: dict[int, str]
     image_size: int
 
@@ -48,14 +53,14 @@ class Prediction:
     image: Image.Image
     detections: tuple[Detection, ...]
     elapsed_ms: float
-    candidate_count: int
-    post_nms_count: int
+    merged_count: int
+    slice_count: int
 
 
-def select_device() -> str | int:
-    """Return the Ultralytics device selector for the best available device."""
+def select_device() -> str:
+    """Return the SAHI/Ultralytics selector for the best available device."""
     if torch.cuda.is_available():
-        return 0
+        return "cuda:0"
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
@@ -76,74 +81,113 @@ def _normalize_names(names: dict[int, str] | list[str]) -> dict[int, str]:
 
 
 def load_model(checkpoint_path: str | Path) -> ModelBundle:
-    """Load the fine-tuned local Ultralytics YOLO checkpoint."""
+    """Load the fine-tuned YOLO checkpoint through SAHI's Ultralytics adapter."""
     checkpoint_file = Path(checkpoint_path).resolve()
     validate_checkpoint_path(checkpoint_file)
-    model = YOLO(str(checkpoint_file))
-    id2label = _normalize_names(model.names)
+    ultralytics_model = YOLO(str(checkpoint_file))
+    id2label = _normalize_names(ultralytics_model.names)
     if not id2label:
         raise ValueError("Checkpoint YOLO không chứa danh sách lớp.")
-    image_size = int(model.overrides.get("imgsz", 640))
-    return ModelBundle(model, select_device(), id2label, image_size)
+    image_size = int(ultralytics_model.overrides.get("imgsz", 640))
+    device = select_device()
+    model = AutoDetectionModel.from_pretrained(
+        model_type="ultralytics",
+        model=ultralytics_model,
+        confidence_threshold=0.04,
+        device=device,
+        image_size=image_size,
+    )
+    return ModelBundle(model, device, id2label, image_size)
 
 
 def predict(
     image: Image.Image,
     bundle: ModelBundle,
     threshold: float = 0.04,
-    max_detections: int = 300,
-    nms_iou_threshold: float = 0.30,
+    max_detections: int = 500,
+    nms_iou_threshold: float = 0.50,
+    slice_overlap: float = DEFAULT_SLICE_OVERLAP,
 ) -> Prediction:
-    """Run YOLO with its built-in confidence filter and class-aware NMS."""
+    """Run SAHI tiles plus its standard prediction and merge them class-wise."""
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("Ngưỡng confidence phải nằm trong khoảng 0 đến 1.")
     if not 0.0 <= nms_iou_threshold <= 1.0:
         raise ValueError("Ngưỡng IoU của NMS phải nằm trong khoảng 0 đến 1.")
     if max_detections < 1:
         raise ValueError("Số kết quả tối đa phải lớn hơn 0.")
+    if not 0.0 <= slice_overlap < 1.0:
+        raise ValueError("Tỷ lệ chồng lấp tile phải nằm trong khoảng từ 0 đến dưới 1.")
 
     rgb_image = image.convert("RGB")
-    if bundle.device == 0:
+    slice_count = count_slices(rgb_image.size, bundle.image_size, slice_overlap)
+    if bundle.device.startswith("cuda"):
         torch.cuda.synchronize()
     started = perf_counter()
-    results = bundle.model.predict(
-        source=rgb_image,
-        conf=float(threshold),
-        iou=float(nms_iou_threshold),
-        max_det=int(max_detections),
-        imgsz=bundle.image_size,
-        device=bundle.device,
-        verbose=False,
+    result = get_sliced_prediction(
+        image=rgb_image,
+        detection_model=bundle.model,
+        slice_height=bundle.image_size,
+        slice_width=bundle.image_size,
+        overlap_height_ratio=float(slice_overlap),
+        overlap_width_ratio=float(slice_overlap),
+        perform_standard_pred=INCLUDE_STANDARD_PREDICTION,
+        postprocess_type="NMS",
+        postprocess_match_metric="IOU",
+        postprocess_match_threshold=float(nms_iou_threshold),
+        postprocess_class_agnostic=False,
+        verbose=0,
+        force_postprocess_type=True,
+        confidence_threshold=float(threshold),
     )
-    if bundle.device == 0:
+    if bundle.device.startswith("cuda"):
         torch.cuda.synchronize()
     elapsed_ms = (perf_counter() - started) * 1000
 
-    result_boxes = results[0].boxes
-    if result_boxes is None or len(result_boxes) == 0:
-        detections: tuple[Detection, ...] = ()
-    else:
-        detections = tuple(
+    merged_detections = sorted(
+        (
             Detection(
-                label_id=int(label_id),
-                label=bundle.id2label.get(int(label_id), f"class-{int(label_id)}"),
-                score=float(score),
-                box=tuple(float(value) for value in box),
+                label_id=int(item.category.id),
+                label=bundle.id2label.get(int(item.category.id), str(item.category.name)),
+                score=float(item.score.value),
+                box=tuple(float(value) for value in item.bbox.to_xyxy()),
             )
-            for box, score, label_id in zip(
-                result_boxes.xyxy.detach().cpu().tolist(),
-                result_boxes.conf.detach().cpu().tolist(),
-                result_boxes.cls.detach().cpu().tolist(),
-                strict=True,
-            )
-        )
+            for item in result.object_prediction_list
+        ),
+        key=lambda item: item.score,
+        reverse=True,
+    )
+    detections = tuple(merged_detections[:max_detections])
 
     return Prediction(
         image=draw_detections(rgb_image, detections),
         detections=detections,
         elapsed_ms=elapsed_ms,
-        candidate_count=len(detections),
-        post_nms_count=len(detections),
+        merged_count=len(merged_detections),
+        slice_count=slice_count,
+    )
+
+
+def count_slices(
+    image_size: tuple[int, int],
+    slice_size: int,
+    overlap_ratio: float = DEFAULT_SLICE_OVERLAP,
+) -> int:
+    """Return how many SAHI tiles will cover an image."""
+    if slice_size < 1:
+        raise ValueError("Kích thước tile phải lớn hơn 0.")
+    if not 0.0 <= overlap_ratio < 1.0:
+        raise ValueError("Tỷ lệ chồng lấp tile phải nằm trong khoảng từ 0 đến dưới 1.")
+    width, height = image_size
+    return len(
+        get_slice_bboxes(
+            image_height=height,
+            image_width=width,
+            slice_height=slice_size,
+            slice_width=slice_size,
+            auto_slice_resolution=False,
+            overlap_height_ratio=overlap_ratio,
+            overlap_width_ratio=overlap_ratio,
+        )
     )
 
 
@@ -151,14 +195,18 @@ def suppress_overlapping_detections(
     detections: tuple[Detection, ...] | list[Detection],
     iou_threshold: float = 0.45,
 ) -> tuple[Detection, ...]:
-    """Apply class-agnostic NMS to an existing detection collection."""
+    """Apply class-aware NMS to an existing detection collection."""
     if not 0.0 <= iou_threshold <= 1.0:
         raise ValueError("Ngưỡng IoU của NMS phải nằm trong khoảng 0 đến 1.")
     if not detections:
         return ()
     boxes = torch.tensor([item.box for item in detections], dtype=torch.float32)
     scores = torch.tensor([item.score for item in detections], dtype=torch.float32)
-    kept = [detections[index] for index in nms(boxes, scores, iou_threshold).tolist()]
+    labels = torch.tensor([item.label_id for item in detections], dtype=torch.int64)
+    kept = [
+        detections[index]
+        for index in batched_nms(boxes, scores, labels, iou_threshold).tolist()
+    ]
     kept.sort(key=lambda item: item.score, reverse=True)
     return tuple(kept)
 
@@ -222,7 +270,6 @@ def model_metadata(checkpoint_path: str | Path) -> dict[str, Any]:
         "architecture": "Ultralytics YOLO",
         "backbone": type(model.model).__name__,
         "classes": len(labels),
-        "queries": image_size,
         "weights_mb": checkpoint_file.stat().st_size / (1024 * 1024),
         "labels": labels,
         "image_size": image_size,
